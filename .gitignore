@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+kifiya_gateway.db
+.DS_Store
