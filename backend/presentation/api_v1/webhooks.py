@@ -88,9 +88,9 @@ def receive_bank_callback(body: BankCallbackBody) -> CallbackAcknowledgement:
 
     _payment_store[body.payment_id] = final_payment
 
-    # In a full implementation this would enqueue a task to POST to the TPP webhook_url.
+    # TODO: enqueue async POST to the TPP's webhook_url.
     if final_payment.webhook_url:
-        pass  # Phase 3: async webhook dispatch via background task
+        pass
 
     return CallbackAcknowledgement(
         payment_id=final_payment.payment_id,

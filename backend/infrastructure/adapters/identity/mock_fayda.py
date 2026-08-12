@@ -1,7 +1,7 @@
 """
 Mock Fayda Identity Adapter — for local development & Swagger testing.
 Layer: 🔴 LAYER 3 — Infrastructure / Driven Adapters
-Phase: MVP stub. Accepts any FIN + OTP "123456" as valid. Replace in Phase 3.
+Legacy mock adapter. Superseded by fayda.py which issues real signed JWTs.
 
 Hardcoded behaviour:
   - initiate_kyc_verification() → always returns a mock session_id
@@ -48,7 +48,7 @@ class FaydaMockAdapter(IdentityPort):
             raise ValueError(f"Session '{session_id}' not found or expired.")
         if otp_code != _MOCK_OTP:
             raise ValueError(
-                f"Invalid OTP. (Hint: use '{_MOCK_OTP}' in mock mode.)"
+                f"Invalid OTP for session '{session_id}'."
             )
         session = _sessions.pop(session_id)
         consent_token = f"{_MOCK_TOKEN_PREFIX}{uuid.uuid4().hex}"

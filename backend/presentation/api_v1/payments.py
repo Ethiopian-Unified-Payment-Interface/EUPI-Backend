@@ -2,9 +2,9 @@
 Presentation Layer: Payment Routes — POST /v1/payments/*
 Layer: 🔵 LAYER 4 — Driving Adapters (Presentation)
 
-Phase 3 upgrade: payments are now persisted to SQLite via SQLiteRepository.
-In-memory dict is still used as a fast cache; SQLite is the source of truth
-and is used to restore the cache on server restart (handled in main.py lifespan).
+Payments are persisted to SQLite via SQLiteRepository. An in-memory dict
+serves as a fast lookup cache; SQLite is the source of truth and restores
+the cache on server restart (via main.py lifespan).
 """
 
 from __future__ import annotations
@@ -107,8 +107,7 @@ def initiate_payment(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
     _payment_store[payment.payment_id] = payment
-    # Bug 2 fix: catch SQLAlchemy unique constraint on end_to_end_id
-    # and surface it as a structured 409 rather than a raw 500.
+    # Catch duplicate end_to_end_id to return 409 instead of 500.
     try:
         repo.save_payment(payment)
     except IntegrityError:

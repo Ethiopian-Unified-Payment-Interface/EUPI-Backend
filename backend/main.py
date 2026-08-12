@@ -1,7 +1,7 @@
 """
 Kifiya Open Consent Gateway — FastAPI Entry Point
 ================================================
-Phase 3: Real infrastructure adapters + SQLite persistence + JWT auth.
+Wires real infrastructure adapters, SQLite persistence, and JWT authentication.
 
 Boot sequence (via lifespan):
   1. Initialise SQLiteRepository → creates tables if absent.
@@ -28,7 +28,7 @@ load_dotenv()  # Load .env file before reading settings
 
 from backend.config import settings  # noqa: E402 — must follow load_dotenv()
 
-# ── Infrastructure: Real Adapters (Phase 3) ────────────────────────────────────
+# ── Infrastructure: Adapters ────────────────────────────────────────────────────
 from backend.infrastructure.adapters.banks.coop_cbs import CoopCBSAdapter
 from backend.infrastructure.adapters.banks.cbe_cbs import CBECBSAdapter
 from backend.infrastructure.adapters.banks.wegagen_cbs import WegagenCBSAdapter
@@ -139,12 +139,12 @@ app = FastAPI(
         "2. **Confirm OTP** — `POST /v1/auth/fayda/confirm` with OTP `123456` → get a **real signed JWT**\n"
         "3. **AIS** — `GET /v1/accounts` with `Bearer <jwt>` → see balances across COOP, CBE, Wegagen\n"
         "4. **PIS** — `POST /v1/payments/initiate` → `verify` → `order` → `POST /v1/callbacks`\n\n"
-        "### Phase 3 upgrades\n"
-        "- Real HS256 JWT tokens (PyJWT) with expiry, scopes, KYC level\n"
-        "- SQLite persistence — payments survive server restarts\n"
-        "- JWT revocation tracked in DB\n"
-        "- Live health_check() polling in Smart Router with rolling uptime scores\n"
-        "- Bank adapters simulate distinct proprietary API formats per bank\n\n"
+        "### Key features\n"
+        "- HS256 JWT tokens (PyJWT) with expiry, scopes, and KYC level enforcement\n"
+        "- SQLite persistence with payment state recovery on restart\n"
+        "- JWT revocation tracking\n"
+        "- Live Smart Router with rolling uptime scoring and circuit breaker\n"
+        "- Per-bank CBS adapters simulating distinct proprietary API formats\n\n"
         "### Architecture\n"
         "Clean + Hexagonal. Dependencies point strictly inward.\n"
         "`domain ← application ← infrastructure ← presentation`"
@@ -183,7 +183,7 @@ def root():
         "service": "Kifiya Open Consent Gateway",
         "version": "0.3.0-alpha",
         "status": "operational",
-        "phase": "3 — Real adapters + SQLite + JWT",
+        "architecture": "Clean + Hexagonal (Ports & Adapters)",
         "registered_rails": ["COOP", "CBE", "WEGAGEN"],
         "database": settings.DATABASE_URL,
         "docs": "/docs",

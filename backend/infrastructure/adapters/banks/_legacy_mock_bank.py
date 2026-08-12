@@ -1,7 +1,7 @@
 """
 Mock Bank Adapter — for local development & Swagger testing.
 Layer: 🔴 LAYER 3 — Infrastructure / Driven Adapters
-Phase: MVP stub. Returns deterministic hardcoded data. Replace with real CBS calls in Phase 3.
+Legacy mock adapter. Superseded by the per-bank CBS adapters (coop_cbs.py, cbe_cbs.py, wegagen_cbs.py).
 
 Each mock bank returns slightly different data so fan-out aggregation is visible in Swagger.
 """
@@ -40,7 +40,7 @@ class _MockBankAdapter(BankPort):
         return self._bank_id
 
     def health_check(self) -> bool:
-        return True  # Mock is always healthy
+        return True
 
     def get_balance(self, account_number: str) -> Account:
         return Account(

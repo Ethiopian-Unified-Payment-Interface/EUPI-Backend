@@ -4,13 +4,13 @@ Smart Payment Router — Production Implementation
 Layer: 🔴 LAYER 3 — Infrastructure / Driven Adapters
 Rule: ONLY layer allowed to call health_check() on bank ports.
 
-Upgrade from Phase 2 MockSmartRouter:
-  ✅ Calls bank_port.health_check() LIVE at evaluation time.
-  ✅ Maintains a rolling uptime window (deque of N most recent checks).
-  ✅ Configurable weight matrix for uptime / latency / cost scoring.
-  ✅ Circuit breaker: rails with < 50% rolling uptime are excluded.
-  ✅ register_rail() accepts BankPort instances (not just BankIDs) for health polling.
-  ✅ evaluate_all_routes() returns full RouteScore for Swagger-visible audit trail.
+Capabilities:
+  - Calls bank_port.health_check() at evaluation time for live latency measurement.
+  - Maintains a rolling uptime window (deque of N most recent checks).
+  - Configurable weight matrix for uptime / latency / cost scoring.
+  - Circuit breaker: rails with < 50% rolling uptime are excluded.
+  - register_rail() accepts BankPort instances for health polling.
+  - evaluate_all_routes() returns full RouteScore for audit trail.
 
 Scoring formula (composite score ∈ [0, 1]):
     score = (W_uptime × uptime_score)

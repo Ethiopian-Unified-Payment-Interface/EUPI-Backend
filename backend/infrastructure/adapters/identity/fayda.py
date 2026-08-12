@@ -7,7 +7,7 @@ Rule: ONLY layer allowed to make external HTTP calls or issue JWTs.
 Production: calls Ethiopia's Fayda OpenID Connect / eKYC API.
 Mock (MVP): simulates Fayda OTP flow. Accepts OTP "123456" for any valid FIN.
 
-Key upgrade from the Phase 2 mock:
+Features:
   ✅ Issues REAL signed JWTs (PyJWT + HS256) instead of prefixed strings.
   ✅ Verifies tokens cryptographically via jwt_handler.
   ✅ Checks revocation via SQLite repo.
@@ -31,10 +31,11 @@ from backend.domain.models.identity import (
 )
 from backend.infrastructure.auth import jwt_handler
 from backend.infrastructure.database.sqlite_repo import SQLiteRepository
+from backend.infrastructure.mock_data.fayda_registry import get_identity
 
 logger = logging.getLogger(__name__)
 
-# In mock mode accept this fixed OTP regardless of FIN.
+# Fixed OTP accepted in development mode.
 _MOCK_OTP = "123456"
 _SESSION_TTL_MINUTES = 5
 
@@ -125,6 +126,14 @@ class FaydaAdapter(IdentityPort):
         # Consume the session (one-time use)
         del self._sessions[session_id]
 
+        # Verify the FIN exists in the national registry before issuing a token
+        identity = get_identity(fin)
+        if identity is None:
+            raise ValueError(
+                f"FIN '{fin}' not found in the Fayda national registry. "
+                "Verification denied."
+            )
+
         # Issue a real signed JWT
         scopes = stored_request.consent_scope.split(",")
         token, jti, expires_at_jwt = jwt_handler.create_gateway_jwt(
@@ -150,9 +159,9 @@ class FaydaAdapter(IdentityPort):
 
         return FaydaKYCResult(
             fin=fin,
-            full_name="Abebe Girma Tadesse",     # In production: from Fayda id_token claims
-            date_of_birth=datetime(1990, 5, 15).date(),
-            gender=Gender.MALE,
+            full_name=identity["full_name"],
+            date_of_birth=datetime.strptime(identity["date_of_birth"], "%Y-%m-%d").date(),
+            gender=Gender(identity["gender"]),
             nationality="ETH",
             kyc_level_achieved=stored_request.required_kyc_level,
             is_verified=True,

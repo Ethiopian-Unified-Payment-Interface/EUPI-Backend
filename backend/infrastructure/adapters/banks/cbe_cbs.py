@@ -104,7 +104,7 @@ class CBECBSAdapter(BankPort):
         remittance_info: str | None = None,
     ) -> str:
         """
-        Production:
+        API contract for CBS integration:
             POST {_BASE_URL}{_TRANSFER_ENDPOINT}
             Body: {source_account, beneficiary_account, beneficiary_bank_code,
                    amount, currency, reference, narration}

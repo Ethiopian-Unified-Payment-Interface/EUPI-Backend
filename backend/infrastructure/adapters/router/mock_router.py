@@ -1,7 +1,7 @@
 """
 Mock Smart Router — for local development & Swagger testing.
 Layer: 🔴 LAYER 3 — Infrastructure / Driven Adapters
-Phase: MVP stub. Selects the lowest-cost registered rail. Replace in Phase 3.
+Legacy mock adapter. Superseded by smart_router.py which uses live health checks.
 
 Routing matrix (mock):
   COOP    — 120ms latency, 99.9% uptime, 2.50 ETB fee

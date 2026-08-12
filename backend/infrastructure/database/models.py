@@ -5,9 +5,11 @@ Layer: 🔴 LAYER 3 — Infrastructure / Database
 Rule: This module defines ONLY table structure. No business logic here.
 
 Tables:
-  payments        — Full lifecycle record for every PIS payment.
-  consent_tokens  — Issued JWTs tracked for revocation support.
-  webhook_events  — Async webhook delivery log per payment.
+  payments         — Full lifecycle record for every PIS payment.
+  consent_tokens   — Issued JWTs tracked for revocation support.
+  webhook_events   — Async webhook delivery log per payment.
+  users            — Super app platform user accounts.
+  linked_accounts  — Bank accounts explicitly linked by super app users.
 """
 
 from __future__ import annotations
@@ -99,3 +101,30 @@ class WebhookEventRecord(Base):
     last_attempted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     delivered: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class UserRecord(Base):
+    """Persisted super app user."""
+    __tablename__ = "users"
+
+    user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    username: Mapped[str] = mapped_column(String(30), nullable=False, unique=True, index=True)
+    fin: Mapped[str] = mapped_column(String(14), nullable=False, unique=True, index=True)
+    full_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    phone_number: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+class LinkedAccountRecord(Base):
+    """Persisted linked bank account for a super app user."""
+    __tablename__ = "linked_accounts"
+
+    link_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    bank_id: Mapped[str] = mapped_column(String(20), nullable=False)
+    account_number: Mapped[str] = mapped_column(String(30), nullable=False)
+    account_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    is_default_sending: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_default_receiving: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    linked_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)

@@ -43,7 +43,6 @@ class CoopCBSAdapter(BankPort):
     and `_mock_statement_response()` with actual httpx calls.
     """
 
-    # Production endpoint (commented out until real integration is live)
     _BASE_URL = "https://cbs-api.coopethiopia.com/v2"
     _ACCOUNT_ENDPOINT = "/accounts/{account_number}"
     _STATEMENT_ENDPOINT = "/accounts/{account_number}/entries"
@@ -82,7 +81,6 @@ class CoopCBSAdapter(BankPort):
         Production: GET {_BASE_URL}{_HEALTH_ENDPOINT} with a 5s timeout.
         Mock: 99.1% uptime simulation.
         """
-        # Production code (uncomment when live):
         # try:
         #     resp = httpx.get(f"{self._BASE_URL}{self._HEALTH_ENDPOINT}",
         #                      headers=self._headers, timeout=5.0)
@@ -125,7 +123,6 @@ class CoopCBSAdapter(BankPort):
         Production: POST {_BASE_URL}{_TRANSFER_ENDPOINT} with signed payload.
         Mock: returns a realistic Coop order reference.
         """
-        # Production:
         # payload = {"debtorAcct": debtor_account, "creditorAcct": creditor_account,
         #            "creditorBankCode": creditor_bank_id.value, "amount": str(amount),
         #            "currency": currency, "endToEndId": end_to_end_id,
