@@ -17,7 +17,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 
-router = APIRouter(prefix="/payments", tags=["💳 Payment Initiation (PIS)"])
+router = APIRouter(prefix="/payments", tags=["Payment Initiation (PIS)"])
 _bearer = HTTPBearer()
 
 # In-memory cache — populated from SQLite on startup via main.py lifespan

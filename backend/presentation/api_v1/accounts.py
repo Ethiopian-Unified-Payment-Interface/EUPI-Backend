@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 from backend.infrastructure.auth import jwt_handler
 
-router = APIRouter(prefix="/accounts", tags=["🏦 Account Information (AIS)"])
+router = APIRouter(prefix="/accounts", tags=["Account Information (AIS)"])
 _bearer = HTTPBearer()
 
 

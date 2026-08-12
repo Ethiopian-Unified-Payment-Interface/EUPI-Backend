@@ -10,7 +10,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-router = APIRouter(prefix="/auth", tags=["🔐 Authentication"])
+router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
 # ── Request / Response schemas (presentation-layer only) ──────────────────────

@@ -12,7 +12,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-router = APIRouter(prefix="/callbacks", tags=["🔔 Webhooks & Callbacks"])
+router = APIRouter(prefix="/callbacks", tags=["Webhooks & Callbacks"])
 
 
 # ── Request / Response schemas ─────────────────────────────────────────────────
