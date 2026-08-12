@@ -99,3 +99,21 @@ class WebhookEventRecord(Base):
     last_attempted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     delivered: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class UserHandleRecord(Base):
+    """
+    User handle registry mapping unique payment handles (@username) to customer
+    Fayda Identification Numbers (FIN), 6-digit PIN hash, and default bank account.
+    """
+
+    __tablename__ = "user_handles"
+
+    username: Mapped[str] = mapped_column(String(50), primary_key=True)  # e.g., "abebe"
+    fin: Mapped[str] = mapped_column(String(14), nullable=False, index=True)
+    pin_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    default_bank_id: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    default_account_number: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+

@@ -44,7 +44,7 @@ from backend.application.use_cases.pis_service import PISService
 from backend.domain.models.account import BankID
 
 # ── Presentation: API Routers ─────────────────────────────────────────────────
-from backend.presentation.api_v1 import accounts, auth, payments, webhooks
+from backend.presentation.api_v1 import accounts, auth, handles, payments, webhooks
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Singleton instances (module-level, created once at startup)
@@ -170,9 +170,11 @@ app.add_middleware(
 # ── Mount API v1 Routers ───────────────────────────────────────────────────────
 API_V1_PREFIX = "/v1"
 app.include_router(auth.router,     prefix=API_V1_PREFIX)
+app.include_router(handles.router,  prefix=API_V1_PREFIX)
 app.include_router(accounts.router, prefix=API_V1_PREFIX)
 app.include_router(payments.router, prefix=API_V1_PREFIX)
 app.include_router(webhooks.router, prefix=API_V1_PREFIX)
+
 
 
 # ── Root health check ──────────────────────────────────────────────────────────

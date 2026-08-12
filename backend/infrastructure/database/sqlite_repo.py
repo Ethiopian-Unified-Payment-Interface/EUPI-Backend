@@ -34,8 +34,10 @@ from backend.infrastructure.database.models import (
     Base,
     ConsentTokenRecord,
     PaymentRecord,
+    UserHandleRecord,
     WebhookEventRecord,
 )
+
 
 
 class SQLiteRepository:
@@ -235,3 +237,63 @@ class SQLiteRepository:
             return session.query(WebhookEventRecord).filter(
                 WebhookEventRecord.delivered == False  # noqa: E712
             ).all()
+
+    # User Handle Management
+    def is_handle_available(self, username: str) -> bool:
+        """Check if a handle (@username) is available for registration."""
+        clean_handle = username.strip().lstrip("@").lower()
+        with self._session() as session:
+            record = session.get(UserHandleRecord, clean_handle)
+            return record is None
+
+    def register_handle(
+        self,
+        username: str,
+        fin: str,
+        pin: str | None = None,
+        default_bank_id: str | None = None,
+        default_account_number: str | None = None,
+    ) -> UserHandleRecord:
+        """Bind a handle (@username) to a customer's Fayda FIN and 6-digit security PIN."""
+        clean_handle = username.strip().lstrip("@").lower()
+        pin_hash = f"pin_hash_{pin}" if pin else None
+        record = UserHandleRecord(
+            username=clean_handle,
+            fin=fin,
+            pin_hash=pin_hash,
+            default_bank_id=default_bank_id.upper() if default_bank_id else None,
+            default_account_number=default_account_number,
+            created_at=datetime.now(tz=timezone.utc).replace(tzinfo=None),
+        )
+        with self._session() as session:
+            session.merge(record)
+        return record
+
+    def update_default_account(
+        self,
+        username: str,
+        default_bank_id: str,
+        default_account_number: str,
+    ) -> UserHandleRecord | None:
+        """Update default receiving bank account for registered handle."""
+        clean_handle = username.strip().lstrip("@").lower()
+        with self._session() as session:
+            record = session.get(UserHandleRecord, clean_handle)
+            if record:
+                record.default_bank_id = default_bank_id.upper()
+                record.default_account_number = default_account_number
+                session.merge(record)
+            return record
+
+    def get_handle(self, username: str) -> UserHandleRecord | None:
+        """Get handle registry entry by username."""
+        clean_handle = username.strip().lstrip("@").lower()
+        with self._session() as session:
+            return session.get(UserHandleRecord, clean_handle)
+
+    def get_handle_by_fin(self, fin: str) -> UserHandleRecord | None:
+        """Get handle registry entry by Fayda FIN."""
+        with self._session() as session:
+            return session.query(UserHandleRecord).filter(UserHandleRecord.fin == fin).first()
+
+
