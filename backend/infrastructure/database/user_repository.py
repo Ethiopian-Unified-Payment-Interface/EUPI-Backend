@@ -58,6 +58,7 @@ class SQLiteUserRepository(UserRepositoryPort):
             phone_number=user.phone_number,
             created_at=user.created_at.replace(tzinfo=None),
             is_active=user.is_active,
+            pin_hash=user.pin_hash,
         )
         with self._session() as session:
             session.add(record)
@@ -97,4 +98,12 @@ class SQLiteUserRepository(UserRepositoryPort):
             phone_number=record.phone_number,
             created_at=record.created_at.replace(tzinfo=timezone.utc),
             is_active=record.is_active,
+            pin_hash=record.pin_hash,
         )
+
+    def update_pin_hash(self, user_id: str, pin_hash: str) -> None:
+        with self._session() as session:
+            record = session.get(UserRecord, user_id)
+            if record is None:
+                raise ValueError(f"User '{user_id}' not found.")
+            record.pin_hash = pin_hash

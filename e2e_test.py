@@ -125,15 +125,16 @@ if isinstance(r, list) and len(r) > 0:
     check("Transaction has amount", "amount" in r[0], str(r[0]))
     check("Transaction has type", "transaction_type" in r[0], str(r[0]))
 
-# ── 6. Register Super App Users ──────────────────────────────────────────────
-print("\n── 6. Register Super App Users ──")
+# ── 6. Register Super App Users (with 6-digit PIN) ──────────────────────────
+print("\n── 6. Register Super App Users (with 6-digit PIN) ──")
 r = req("POST", "/v1/superapp/users/register", {
     "username": "abebe_test_e2e",
     "fin": "12345678901234",
     "full_name": "Abebe Girma Tadesse",
-    "phone_number": "+251911234567"
+    "phone_number": "+251911234567",
+    "pin": "123456"
 })
-check("Sender registered", "user_id" in r, str(r))
+check("Sender registered with PIN", "user_id" in r, str(r))
 sender_user_id = r.get("user_id", "")
 check("Username matches", r.get("username") == "abebe_test_e2e", str(r))
 
@@ -141,18 +142,50 @@ r = req("POST", "/v1/superapp/users/register", {
     "username": "selamawit_e2e",
     "fin": "23456789012345",
     "full_name": "Selamawit Bekele Hailu",
-    "phone_number": "+251922345678"
+    "phone_number": "+251922345678",
+    "pin": "654321"
 })
-check("Recipient registered", "user_id" in r, str(r))
+check("Recipient registered with PIN", "user_id" in r, str(r))
 recip_user_id = r.get("user_id", "")
 
-# ── 7. Duplicate Registration Rejected ────────────────────────────────────────
+# ── 6b. PIN Login & Authentication ────────────────────────────────────────────
+print("\n── 6b. PIN Login & Authentication ──")
+r = req("POST", "/v1/superapp/users/login", {
+    "username": "abebe_test_e2e",
+    "pin": "123456"
+})
+check("PIN Login successful", r.get("user_id") == sender_user_id, str(r))
+check("Welcome message returned", "PIN verified" in r.get("message", ""), str(r))
+
+r = req("POST", "/v1/superapp/users/login", {
+    "username": "abebe_test_e2e",
+    "pin": "999999"
+})
+check("Incorrect PIN rejected (401)", r.get("_status") == 401, str(r))
+
+# ── 6c. Change PIN ────────────────────────────────────────────────────────────
+print("\n── 6c. Change PIN ──")
+r = req("PUT", "/v1/superapp/users/change-pin", {
+    "user_id": sender_user_id,
+    "current_pin": "123456",
+    "new_pin": "112233"
+})
+check("PIN changed successfully", "message" in r, str(r))
+
+r = req("POST", "/v1/superapp/users/login", {
+    "username": "abebe_test_e2e",
+    "pin": "112233"
+})
+check("Login with new PIN successful", r.get("user_id") == sender_user_id, str(r))
+
+# ── 7. Duplicate Registration Guard ────────────────────────────────────────
 print("\n── 7. Duplicate Registration Guard ──")
 r = req("POST", "/v1/superapp/users/register", {
     "username": "abebe_test_e2e",
     "fin": "12345678901234",
     "full_name": "Abebe Girma Tadesse",
-    "phone_number": "+251911234567"
+    "phone_number": "+251911234567",
+    "pin": "123456"
 })
 check("Duplicate username rejected", r.get("_error") is True, str(r))
 

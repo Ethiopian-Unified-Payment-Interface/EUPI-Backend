@@ -52,6 +52,11 @@ class SuperAppUser(BaseModel):
         default=True,
         description="Whether the account is active.",
     )
+    pin_hash: str | None = Field(
+        default=None,
+        description="SHA-256 hash of the user's 6-digit PIN. Never stored in plaintext.",
+        exclude=True,  # Never serialized in API responses
+    )
 
     model_config = {
         "json_schema_extra": {
@@ -63,6 +68,7 @@ class SuperAppUser(BaseModel):
                 "phone_number": "+251911234567",
                 "created_at": "2026-08-11T10:30:00Z",
                 "is_active": True,
+                "pin_hash": "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
             }
         }
     }

@@ -12,6 +12,7 @@ Responsibilities:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import uuid
@@ -40,12 +41,18 @@ class UserRegistrationService:
     def __init__(self, user_repo: UserRepositoryPort) -> None:
         self._user_repo = user_repo
 
+    @staticmethod
+    def _hash_pin(pin: str) -> str:
+        """Hash a 6-digit PIN with SHA-256. Never store plaintext PINs."""
+        return hashlib.sha256(pin.encode()).hexdigest()
+
     def register_user(
         self,
         username: str,
         fin: str,
         full_name: str,
         phone_number: str,
+        pin: str,
     ) -> SuperAppUser:
         """
         Register a new super app user.
@@ -87,12 +94,19 @@ class UserRegistrationService:
                 f"A super app account already exists for this FIN."
             )
 
+        # Validate PIN format
+        if not pin.isdigit() or len(pin) != 6:
+            raise InvalidPINError(
+                "PIN must be exactly 6 digits."
+            )
+
         user = SuperAppUser(
             user_id=str(uuid.uuid4()),
             username=username,
             fin=fin,
             full_name=full_name,
             phone_number=phone_number,
+            pin_hash=self._hash_pin(pin),
             created_at=datetime.now(tz=timezone.utc),
             is_active=True,
         )
@@ -133,6 +147,73 @@ class UserRegistrationService:
             full_name=user.full_name,
         )
 
+    def verify_pin(self, username: str, pin: str) -> SuperAppUser:
+        """
+        Verify a user's PIN for app login.
+
+        Args:
+            username: The unique handle of the user.
+            pin:      The 6-digit PIN entered by the user.
+
+        Returns:
+            The authenticated SuperAppUser domain object.
+
+        Raises:
+            UserNotFoundError: If no user exists with this username.
+            InvalidPINError:   If the PIN does not match.
+            AccountInactiveError: If the account is deactivated.
+        """
+        user = self._user_repo.get_by_username(username)
+        if user is None:
+            raise UserNotFoundError(
+                f"No user found with username '{username}'."
+            )
+
+        if not user.is_active:
+            raise AccountInactiveError(
+                f"Account '{username}' is deactivated."
+            )
+
+        if user.pin_hash is None or user.pin_hash != self._hash_pin(pin):
+            raise InvalidPINError("Incorrect PIN.")
+
+        logger.info(
+            "PIN verification successful",
+            extra={"user_id": user.user_id, "username": user.username},
+        )
+
+        return user
+
+    def change_pin(self, user_id: str, current_pin: str, new_pin: str) -> None:
+        """
+        Change a user's PIN.
+
+        Args:
+            user_id:     The user's unique ID.
+            current_pin: The current 6-digit PIN.
+            new_pin:     The new 6-digit PIN.
+
+        Raises:
+            UserNotFoundError: If the user_id doesn't exist.
+            InvalidPINError:   If the current PIN is wrong or new PIN format is invalid.
+        """
+        user = self._user_repo.get_by_id(user_id)
+        if user is None:
+            raise UserNotFoundError(f"User '{user_id}' not found.")
+
+        if user.pin_hash is None or user.pin_hash != self._hash_pin(current_pin):
+            raise InvalidPINError("Current PIN is incorrect.")
+
+        if not new_pin.isdigit() or len(new_pin) != 6:
+            raise InvalidPINError("New PIN must be exactly 6 digits.")
+
+        self._user_repo.update_pin_hash(user_id, self._hash_pin(new_pin))
+
+        logger.info(
+            "PIN changed",
+            extra={"user_id": user_id},
+        )
+
 
 # Custom exceptions
 class RegistrationError(Exception):
@@ -149,3 +230,9 @@ class FINAlreadyRegisteredError(RegistrationError):
 
 class UserNotFoundError(RegistrationError):
     """Raised when a username lookup finds no matching user."""
+
+class InvalidPINError(RegistrationError):
+    """Raised when a PIN doesn't meet format requirements or doesn't match."""
+
+class AccountInactiveError(RegistrationError):
+    """Raised when trying to authenticate with a deactivated account."""

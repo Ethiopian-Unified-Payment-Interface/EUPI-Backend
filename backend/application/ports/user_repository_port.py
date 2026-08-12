@@ -105,3 +105,16 @@ class UserRepositoryPort(ABC):
             DatabaseConnectionError: If the underlying storage is unavailable.
         """
         ...
+
+    @abstractmethod
+    def update_pin_hash(self, user_id: str, pin_hash: str) -> None:
+        """Update the stored PIN hash for a user.
+        
+        Args:
+            user_id: The user's unique identifier.
+            pin_hash: The new SHA-256 hash of the PIN.
+            
+        Raises:
+            DatabaseConnectionError: If the underlying storage is unavailable.
+        """
+        ...

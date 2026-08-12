@@ -114,6 +114,7 @@ class UserRecord(Base):
     phone_number: Mapped[str] = mapped_column(String(20), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    pin_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class LinkedAccountRecord(Base):
