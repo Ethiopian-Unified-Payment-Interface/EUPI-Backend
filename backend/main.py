@@ -1,5 +1,5 @@
 """
-Kifiya Open Consent Gateway — FastAPI Entry Point
+EUPI — FastAPI Entry Point
 ================================================
 Wires real infrastructure adapters, SQLite persistence, and JWT authentication.
 
@@ -129,7 +129,7 @@ async def lifespan(app: FastAPI):
 # ══════════════════════════════════════════════════════════════════════════════
 
 app = FastAPI(
-    title="Kifiya Open Consent Gateway",
+    title="EUPI: Ethiopian Unified Payment Integration",
     description=(
         "## Ethiopia's first unified Open Banking API standard.\n\n"
         "Provides standardised access to account information (AIS) and payment "
@@ -180,7 +180,7 @@ app.include_router(webhooks.router, prefix=API_V1_PREFIX)
 def root():
     """Returns gateway status, registered rails, and DB path."""
     return {
-        "service": "Kifiya Open Consent Gateway",
+        "service": "EUPI: Ethiopian Unified Payment Integration",
         "version": "0.3.0-alpha",
         "status": "operational",
         "architecture": "Clean + Hexagonal (Ports & Adapters)",

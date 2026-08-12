@@ -1,8 +1,8 @@
-# Kifiya Open Consent Gateway: Enterprise Specification
+# EUPI: Ethiopian Unified Payment Integration — Enterprise Specification
 **Master Context File for Autonomous Agent (`agy`)**
 
 ## 1. Project Mission & Scope
-*   **Objective:** Build Ethiopia’s first unified Open Banking API standard. The system sits on top of Kifiya's existing Core Banking System (CBS) integrations (e.g., Coop, Wegagen, CBE, Awash). 
+*   **Objective:** Build Ethiopia’s first unified Open Banking API standard. The system sits on top of existing Core Banking System (CBS) integrations (e.g., Coop, Wegagen, CBE, Awash). 
 *   **Core Capabilities:**
     1.  **AIS (Account Info):** Unified access to account balances, KYC metadata, and 1-year transaction history across all banks.
     2.  **PIS (Payment Initiation):** Standardized 4-step lifecycle (Initiate -> Verify -> Order -> Callback).

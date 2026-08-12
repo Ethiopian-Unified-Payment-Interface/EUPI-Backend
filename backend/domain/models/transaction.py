@@ -43,7 +43,7 @@ class TransactionChannel(str, Enum):
     INTERNET = "INTERNET"
     BRANCH = "BRANCH"
     POS = "POS"
-    GATEWAY = "GATEWAY"   # Initiated via Kifiya Open Gateway
+    GATEWAY = "GATEWAY"   # Initiated via EUPI Gateway
 
 
 class RemittanceInfo(BaseModel):
