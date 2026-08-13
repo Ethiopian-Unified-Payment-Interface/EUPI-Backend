@@ -85,19 +85,23 @@ class SuperAppTransferService:
             NoDefaultAccountError:       If sender or recipient has no default account.
             SelfTransferError:           If sender tries to send to themselves.
         """
+        from backend.domain.models.user import normalize_username
+        norm_sender = normalize_username(sender_username)
+        norm_recipient = normalize_username(recipient_username)
+
         # Resolve recipient
-        recipient = self._user_repo.get_by_username(recipient_username)
+        recipient = self._user_repo.get_by_username(norm_recipient)
         if recipient is None:
             raise RecipientNotFoundError(
                 f"No user found with username '{recipient_username}'."
             )
 
         # Prevent self-transfer
-        if recipient.username == sender_username:
+        if recipient.username == norm_sender:
             raise SelfTransferError("Cannot send money to yourself.")
 
         # Find sender's default sending account
-        sender_account = self._find_default_sending(sender_username)
+        sender_account = self._find_default_sending(norm_sender)
         if sender_account is None:
             raise NoDefaultAccountError(
                 "You have no default sending account. Please link a bank account first."
@@ -159,7 +163,8 @@ class SuperAppTransferService:
 
     def _find_default_sending(self, username: str) -> LinkedAccount | None:
         """Find the user's default sending account, or None."""
-        links = self._link_repo.list_for_user(username)
+        from backend.domain.models.user import normalize_username
+        links = self._link_repo.list_for_user(normalize_username(username))
         for link in links:
             if link.is_default_sending:
                 return link
@@ -167,7 +172,8 @@ class SuperAppTransferService:
 
     def _find_default_receiving(self, username: str) -> LinkedAccount | None:
         """Find the user's default receiving account, or None."""
-        links = self._link_repo.list_for_user(username)
+        from backend.domain.models.user import normalize_username
+        links = self._link_repo.list_for_user(normalize_username(username))
         for link in links:
             if link.is_default_receiving:
                 return link

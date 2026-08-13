@@ -185,3 +185,57 @@ def decode_superapp_session_jwt(token: str) -> dict[str, Any]:
         options={"require": ["sub", "jti", "type", "exp", "iat"]},
     )
 
+
+def create_registration_token(
+    fin: str,
+    full_name: str,
+    phone_number: str,
+) -> str:
+    """
+    Issue a signed temporary registration token after Step 2 OTP verification.
+
+    Args:
+        fin:          Verified Fayda Identification Number.
+        full_name:    Legal full name from Fayda registry.
+        phone_number: E.164 phone number from Fayda registry.
+
+    Returns:
+        Encoded JWT token string (valid for 15 minutes).
+    """
+    now = datetime.now(tz=timezone.utc)
+    expires_at = now + timedelta(minutes=15)
+
+    payload: dict[str, Any] = {
+        "fin": fin,
+        "full_name": full_name,
+        "phone_number": phone_number,
+        "type": "registration_verification",
+        "iss": "kifiya-open-gateway",
+        "iat": int(now.timestamp()),
+        "exp": int(expires_at.timestamp()),
+    }
+
+    return jwt.encode(
+        payload,
+        settings.JWT_SECRET_KEY,
+        algorithm=settings.JWT_ALGORITHM,
+    )
+
+
+def decode_registration_token(token: str) -> dict[str, Any]:
+    """
+    Decode and verify a registration token.
+
+    Args:
+        token: The registration token string.
+
+    Returns:
+        Decoded payload dict containing 'fin', 'full_name', 'phone_number'.
+    """
+    return jwt.decode(
+        token,
+        settings.JWT_SECRET_KEY,
+        algorithms=[settings.JWT_ALGORITHM],
+        options={"require": ["fin", "full_name", "phone_number", "type", "exp", "iat"]},
+    )
+

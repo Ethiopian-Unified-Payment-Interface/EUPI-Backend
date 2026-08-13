@@ -81,7 +81,9 @@ class AccountLinkingService:
             AccountVerificationError: If the bank port cannot verify the account.
         """
         # Verify user exists
-        user = self._user_repo.get_by_username(username)
+        from backend.domain.models.user import normalize_username
+        full_username = normalize_username(username)
+        user = self._user_repo.get_by_username(full_username)
         if user is None:
             raise UserNotFoundError(
                 f"No super app user found with username '{username}'."
@@ -112,12 +114,12 @@ class AccountLinkingService:
             )
 
         # Check if this is the user's first linked account
-        existing_links = self._link_repo.list_for_user(username)
+        existing_links = self._link_repo.list_for_user(full_username)
         is_first = len(existing_links) == 0
 
         link = LinkedAccount(
             link_id=str(uuid.uuid4()),
-            username=username,
+            username=full_username,
             bank_id=bank_id,
             account_number=account_number,
             account_name=account.account_name,
@@ -131,7 +133,7 @@ class AccountLinkingService:
         logger.info(
             "Account linked",
             extra={
-                "username": username,
+                "username": full_username,
                 "bank_id": bank_id.value,
                 "link_id": link.link_id,
                 "is_first": is_first,
@@ -150,7 +152,8 @@ class AccountLinkingService:
         Returns:
             A list of LinkedAccount domain objects.
         """
-        return self._link_repo.list_for_user(username)
+        from backend.domain.models.user import normalize_username
+        return self._link_repo.list_for_user(normalize_username(username))
 
     def sync_user_accounts(self, username: str) -> list[dict]:
         """
@@ -162,7 +165,8 @@ class AccountLinkingService:
         Returns:
             A list of dicts with live account balance details.
         """
-        links = self._link_repo.list_for_user(username)
+        from backend.domain.models.user import normalize_username
+        links = self._link_repo.list_for_user(normalize_username(username))
         synced = []
         for link in links:
             port = self._bank_ports.get(link.bank_id)
@@ -212,12 +216,14 @@ class AccountLinkingService:
             LinkNotFoundError: If the link_id doesn't exist.
             NotOwnerError:     If the link belongs to a different user.
         """
+        from backend.domain.models.user import normalize_username
+        full_username = normalize_username(username)
         link = self._link_repo.get_link(link_id)
         if link is None:
             raise LinkNotFoundError(
                 f"Linked account '{link_id}' not found."
             )
-        if link.username != username:
+        if link.username != full_username:
             raise NotOwnerError(
                 f"Linked account '{link_id}' does not belong to user '{username}'."
             )
@@ -241,18 +247,20 @@ class AccountLinkingService:
             LinkNotFoundError: If the link_id doesn't exist.
             NotOwnerError:     If the link belongs to a different user.
         """
+        from backend.domain.models.user import normalize_username
+        full_username = normalize_username(username)
         link = self._link_repo.get_link(link_id)
         if link is None:
             raise LinkNotFoundError(
                 f"Linked account '{link_id}' not found."
             )
-        if link.username != username:
+        if link.username != full_username:
             raise NotOwnerError(
                 f"Linked account '{link_id}' does not belong to user '{username}'."
             )
 
         self._link_repo.remove_link(link_id)
-        logger.info("Account link removed", extra={"link_id": link_id, "username": username})
+        logger.info("Account link removed", extra={"link_id": link_id, "username": full_username})
 
 
 # Custom exceptions

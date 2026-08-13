@@ -138,9 +138,11 @@ For testing other accounts, any valid account number string will resolve cleanly
 
 ## 4. Super App User Handles & PIN Sessions
 
-### Username Formatting
-- Base handles chosen during registration auto-append **`@eupi`** (e.g., `abebe_girma` → `abebe_girma@eupi`).
-- Usernames are **case-insensitive primary keys** and must be unique.
+### Username Handle Entry & Automatic Postfix Handling
+- Users **only enter their base handle** when registering or performing any action (e.g. `abebe_girma` or `selamawit_bekele`).
+- Users **do not need to type `@eupi`**; the backend automatically sanitizes, normalizes, and appends the `@eupi` postfix internally.
+- Entering either `abebe_girma` or `abebe_girma@eupi` works transparently across all endpoints (`POST /superapp/users/login`, `POST /superapp/accounts/link`, `POST /superapp/transfers`, `GET /superapp/users/{username}`, etc.).
+- Usernames are **case-insensitive primary keys**.
 
 ### PIN Login & Session Tokens
 - **Login Authentication**: Super App login uses a 6-digit numeric PIN (`POST /superapp/users/login`).
@@ -163,14 +165,17 @@ The **Smart Router** continuously calculates real-time rail scores for transfer 
 1. `COOP` — Cooperative Bank of Oromia
 2. `CBE` — Commercial Bank of Ethiopia
 3. `WEGAGEN` — Wegagen Bank
+4. `AWASH` — Awash Bank
+5. `ABYSSINIA` — Bank of Abyssinia
+6. `BERHAN` — Berhan Bank
 
 ---
 
 ## 6. Step-by-Step Frontend Testing Flows
 
-### Flow A: Super App User Registration (2-Step Fayda eKYC OTP)
+### Flow A: Super App User Registration (3-Step Flow)
 
-1. **Request Registration OTP**:
+1. **Step 1: Request Registration OTP**:
    ```http
    POST /v1/superapp/users/register/request-otp
    Content-Type: application/json
@@ -182,32 +187,42 @@ The **Smart Router** continuously calculates real-time rail scores for transfer 
    ```
    *Response*: Returns `"session_id": "FAYDA-SES-..."`
 
-2. **Complete Registration**:
+2. **Step 2: Verify Registration OTP**:
    ```http
-   POST /v1/superapp/users/register
+   POST /v1/superapp/users/register/verify-otp
    Content-Type: application/json
 
    {
-     "username": "abebe_girma",
-     "fin": "12345678901234",
-     "pin": "123456",
      "session_id": "FAYDA-SES-...",
      "otp_code": "123456"
    }
    ```
-   *Response*: Returns profile with username `abebe_girma@eupi` and legal name `Abebe Girma Tadesse`.
+   *Response*: Returns `"registration_token": "eyJhbGci..."`, `fin`, `full_name`, and `phone_number`.
+
+3. **Step 3: Complete Registration**:
+   ```http
+   POST /v1/superapp/users/register/complete
+   Content-Type: application/json
+
+   {
+     "registration_token": "eyJhbGci...",
+     "username": "abebe_girma",
+     "pin": "123456"
+   }
+   ```
+   *Response*: Creates profile with username `abebe_girma@eupi` and legal name `Abebe Girma Tadesse`.
 
 ---
 
 ### Flow B: Super App PIN Login & Session Maintenance
 
-1. **Login with 6-Digit PIN**:
+1. **Login with 6-Digit PIN** (base handle without typing `@eupi`):
    ```http
    POST /v1/superapp/users/login
    Content-Type: application/json
 
    {
-     "username": "abebe_girma@eupi",
+     "username": "abebe_girma",
      "pin": "123456"
    }
    ```
@@ -230,6 +245,7 @@ The **Smart Router** continuously calculates real-time rail scores for transfer 
    Content-Type: application/json
 
    {
+     "username": "abebe_girma",
      "bank_id": "COOP",
      "account_number": "1000234567890"
    }
@@ -247,8 +263,8 @@ The **Smart Router** continuously calculates real-time rail scores for transfer 
    Content-Type: application/json
 
    {
-     "sender_username": "abebe_girma@eupi",
-     "recipient_username": "selamawit_bekele@eupi",
+     "sender_username": "abebe_girma",
+     "recipient_username": "selamawit_bekele",
      "amount": 250.00,
      "remittance_info": "Dinner share"
    }

@@ -27,18 +27,18 @@ class LinkAccountRequest(BaseModel):
 
     username: str = Field(
         ...,
-        description="Super App username (with @eupi suffix).",
-        examples=["abebe_girma@eupi"],
+        description="Super App username handle (e.g. 'abebe_girma'). The @eupi postfix is automatically handled.",
+        examples=["abebe_girma"],
     )
     bank_id: str = Field(
         ...,
-        description="Bank rail code (COOP, CBE, or WEGAGEN).",
+        description="Bank rail code (COOP, CBE, WEGAGEN, AWASH, ABYSSINIA, or BERHAN).",
         examples=["COOP"],
     )
     account_number: str = Field(
         ...,
         description="Account number at the bank.",
-        examples=["1000123456789"],
+        examples=["1000234567890"],
     )
 
 
@@ -47,8 +47,8 @@ class SetDefaultRequest(BaseModel):
 
     username: str = Field(
         ...,
-        description="Super App username (with @eupi suffix).",
-        examples=["abebe_girma@eupi"],
+        description="Super App username handle (e.g. 'abebe_girma'). The @eupi postfix is automatically handled.",
+        examples=["abebe_girma"],
     )
     direction: AccountDirection = Field(
         ...,
@@ -112,9 +112,10 @@ def link_account(
 ) -> LinkedAccountResponse:
     from backend.main import get_account_linking_service
     from backend.domain.models.account import BankID
+    from backend.domain.models.user import normalize_username
     service = get_account_linking_service()
 
-    if current_user.username != body.username:
+    if normalize_username(current_user.username) != normalize_username(body.username):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot link an account for another user.")
 
     try:
@@ -145,7 +146,7 @@ def link_account(
     summary="Sync Connected Banks & Live Balances",
     description=(
         "**Queries live balances across all connected bank accounts for the authenticated session user.**\n\n"
-        "Provides real-time balance synchronization across COOP, CBE, and Wegagen rails."
+        "Provides real-time balance synchronization across connected bank rails."
     ),
 )
 def sync_connected_banks(
@@ -170,9 +171,10 @@ def list_linked_accounts(
     current_user: SuperAppUser = Depends(get_current_superapp_user),
 ) -> list[LinkedAccountResponse]:
     from backend.main import get_account_linking_service
+    from backend.domain.models.user import normalize_username
     service = get_account_linking_service()
 
-    if current_user.username != username:
+    if normalize_username(current_user.username) != normalize_username(username):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot view accounts of another user.")
 
     links = service.list_linked_accounts(username=username)
@@ -204,9 +206,10 @@ def set_default_account(
     current_user: SuperAppUser = Depends(get_current_superapp_user),
 ) -> MessageResponse:
     from backend.main import get_account_linking_service
+    from backend.domain.models.user import normalize_username
     service = get_account_linking_service()
 
-    if current_user.username != body.username:
+    if normalize_username(current_user.username) != normalize_username(body.username):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot modify account of another user.")
 
     try:
@@ -232,9 +235,10 @@ def remove_linked_account(
     current_user: SuperAppUser = Depends(get_current_superapp_user),
 ) -> MessageResponse:
     from backend.main import get_account_linking_service
+    from backend.domain.models.user import normalize_username
     service = get_account_linking_service()
 
-    if current_user.username != username:
+    if normalize_username(current_user.username) != normalize_username(username):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot unlink account of another user.")
 
     try:

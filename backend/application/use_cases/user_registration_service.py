@@ -93,6 +93,89 @@ class UserRegistrationService:
         )
         return self._identity_port.initiate_kyc_verification(req)
 
+    def verify_registration_otp(self, session_id: str, otp_code: str) -> dict[str, str]:
+        """
+        Step 2 of Registration: Verify the 6-digit OTP code received on customer's phone.
+
+        Args:
+            session_id: Fayda OTP session ID from Step 1.
+            otp_code:   6-digit OTP code.
+
+        Returns:
+            Dict containing registration_token, fin, full_name, phone_number.
+        """
+        if self._identity_port is None:
+            raise RuntimeError("Identity port not initialized.")
+
+        # Inspect session entry to get FIN
+        sessions = getattr(self._identity_port, "_sessions", {})
+        entry = sessions.get(session_id)
+        if entry is None:
+            raise InvalidOTPError("Registration OTP session not found, expired, or already consumed.")
+
+        stored_request, _, _ = entry
+        fin = stored_request.fin
+
+        kyc_result = self._identity_port.confirm_kyc_otp(
+            session_id=session_id,
+            otp_code=otp_code,
+            fin=fin,
+        )
+
+        from backend.infrastructure.mock_data.fayda_registry import get_identity
+        identity = get_identity(fin)
+        if identity is None:
+            raise FaydaIdentityNotFoundError(f"FIN '{fin}' not registered in Fayda.")
+
+        from backend.infrastructure.auth import jwt_handler
+        token = jwt_handler.create_registration_token(
+            fin=fin,
+            full_name=kyc_result.full_name,
+            phone_number=identity["phone_number"],
+        )
+
+        return {
+            "registration_token": token,
+            "fin": fin,
+            "full_name": kyc_result.full_name,
+            "phone_number": identity["phone_number"],
+        }
+
+    def complete_registration(
+        self,
+        registration_token: str,
+        username: str,
+        pin: str,
+    ) -> SuperAppUser:
+        """
+        Step 3 of Registration: Create user account using verified registration token, username, and 6-digit PIN.
+
+        Args:
+            registration_token: Signed token from Step 2 OTP verification.
+            username:           Base handle (3-30 chars, alphanumeric + underscores).
+            pin:                6-digit numeric login PIN.
+
+        Returns:
+            A fully populated SuperAppUser domain object.
+        """
+        from backend.infrastructure.auth import jwt_handler
+        try:
+            payload = jwt_handler.decode_registration_token(registration_token)
+        except Exception as exc:
+            raise InvalidRegistrationTokenError(f"Invalid or expired registration token: {exc}")
+
+        fin = payload["fin"]
+        full_name = payload["full_name"]
+        phone_number = payload["phone_number"]
+
+        return self.register_user(
+            username=username,
+            fin=fin,
+            full_name=full_name,
+            phone_number=phone_number,
+            pin=pin,
+        )
+
     def register_user(
         self,
         username: str,
@@ -142,15 +225,17 @@ class UserRegistrationService:
             verified_full_name = full_name or fayda_identity["full_name"]
             verified_phone = phone_number or fayda_identity["phone_number"]
 
-        # Validate username format
-        if not _USERNAME_PATTERN.match(username):
+        # Validate base username format
+        from backend.domain.models.user import get_base_username, normalize_username
+        base_handle = get_base_username(username)
+        if not _USERNAME_PATTERN.match(base_handle):
             raise InvalidUsernameError(
                 f"Username '{username}' is invalid. Must be 3-30 characters, "
                 "alphanumeric and underscores only."
             )
 
         # Check username uniqueness
-        full_username = f"{username}@eupi"
+        full_username = normalize_username(username)
         if self._user_repo.username_exists(full_username):
             raise UsernameAlreadyTakenError(
                 f"Username '{username}' is already taken."
@@ -204,7 +289,9 @@ class UserRegistrationService:
         Raises:
             UserNotFoundError: If no user exists with this username.
         """
-        user = self._user_repo.get_by_username(username)
+        from backend.domain.models.user import normalize_username
+        full_username = normalize_username(username)
+        user = self._user_repo.get_by_username(full_username)
         if user is None:
             raise UserNotFoundError(
                 f"No user found with username '{username}'."
@@ -231,7 +318,9 @@ class UserRegistrationService:
             InvalidPINError:   If the PIN does not match.
             AccountInactiveError: If the account is deactivated.
         """
-        user = self._user_repo.get_by_username(username)
+        from backend.domain.models.user import normalize_username
+        full_username = normalize_username(username)
+        user = self._user_repo.get_by_username(full_username)
         if user is None:
             raise UserNotFoundError(
                 f"No user found with username '{username}'."
@@ -267,7 +356,6 @@ class UserRegistrationService:
 
         return user, token
 
-
     def change_pin(self, username: str, current_pin: str, new_pin: str) -> None:
         """
         Change a user's PIN.
@@ -281,7 +369,9 @@ class UserRegistrationService:
             UserNotFoundError: If the username doesn't exist.
             InvalidPINError:   If the current PIN is wrong or new PIN format is invalid.
         """
-        user = self._user_repo.get_by_username(username)
+        from backend.domain.models.user import normalize_username
+        full_username = normalize_username(username)
+        user = self._user_repo.get_by_username(full_username)
         if user is None:
             raise UserNotFoundError(f"User '{username}' not found.")
 
@@ -291,11 +381,11 @@ class UserRegistrationService:
         if not new_pin.isdigit() or len(new_pin) != 6:
             raise InvalidPINError("New PIN must be exactly 6 digits.")
 
-        self._user_repo.update_pin_hash(username, self._hash_pin(new_pin))
+        self._user_repo.update_pin_hash(full_username, self._hash_pin(new_pin))
 
         logger.info(
             "PIN changed",
-            extra={"username": username},
+            extra={"username": full_username},
         )
 
 
@@ -323,6 +413,12 @@ class UserNotFoundError(RegistrationError):
 
 class InvalidPINError(RegistrationError):
     """Raised when a PIN doesn't meet format requirements or doesn't match."""
+
+class InvalidOTPError(RegistrationError):
+    """Raised when an OTP code is invalid or expired."""
+
+class InvalidRegistrationTokenError(RegistrationError):
+    """Raised when a registration verification token is invalid or expired."""
 
 class AccountInactiveError(RegistrationError):
     """Raised when trying to authenticate with a deactivated account."""

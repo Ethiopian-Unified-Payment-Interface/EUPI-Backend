@@ -95,3 +95,22 @@ class PublicUserProfile(BaseModel):
             }
         }
     }
+
+
+def normalize_username(username: str) -> str:
+    """
+    Ensure the username has the '@eupi' suffix internally.
+    Accepts both 'abebe_girma' and 'abebe_girma@eupi'.
+    """
+    clean = username.strip().lower()
+    if clean.endswith("@eupi"):
+        return clean
+    return f"{clean}@eupi"
+
+
+def get_base_username(username: str) -> str:
+    """Extract base handle without '@eupi' suffix."""
+    clean = username.strip().lower()
+    if clean.endswith("@eupi"):
+        return clean[:-5]
+    return clean

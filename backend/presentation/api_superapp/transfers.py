@@ -30,13 +30,13 @@ class P2PTransferRequest(BaseModel):
 
     sender_username: str = Field(
         ...,
-        description="Sender's Super App username (with @eupi suffix).",
-        examples=["abebe_girma@eupi"],
+        description="Sender's username handle (e.g. 'abebe_girma'). The @eupi postfix is automatically handled.",
+        examples=["abebe_girma"],
     )
     recipient_username: str = Field(
         ...,
-        description="Recipient's unique handle (looked up to find their default receiving account).",
-        examples=["selamawit_b@eupi"],
+        description="Recipient's username handle (e.g. 'selamawit_b'). The @eupi postfix is automatically handled.",
+        examples=["selamawit_b"],
     )
     amount: Decimal = Field(
         ...,
@@ -77,10 +77,11 @@ def initiate_transfer(
     current_user: SuperAppUser = Depends(get_current_superapp_user),
 ) -> PaymentResponse:
     from backend.main import get_superapp_transfer_service, get_repo
+    from backend.domain.models.user import normalize_username
     service = get_superapp_transfer_service()
     repo = get_repo()
 
-    if current_user.username != body.sender_username:
+    if normalize_username(current_user.username) != normalize_username(body.sender_username):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Cannot initiate transfer on behalf of another user.",

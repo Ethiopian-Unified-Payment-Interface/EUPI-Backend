@@ -108,62 +108,79 @@ print("\n── 4. AIS — Aggregated Balances ──")
 r = req("GET", "/v1/accounts", token=sender_fayda_token)
 check("AIS returned accounts", isinstance(r, list) and len(r) > 0, str(r))
 
-# ── 5. Register Super App Users ──
-print("\n── 5. Register Super App Users (with 6-Digit PIN, Fayda FIN Check & OTP) ──")
-# Attempt registration with unregistered FIN -> Should fail
-r = req("POST", "/v1/superapp/users/register", {
-    "username": "fake_user_test",
+# ── 5. Register Super App Users (3-Step Flow: Request OTP -> Verify OTP -> Complete) ──
+print("\n── 5. Register Super App Users (3-Step Flow: Request OTP -> Verify OTP -> Complete) ──")
+r = req("POST", "/v1/superapp/users/register/request-otp", {
     "fin": "99999999999999",  # Not in Fayda Registry!
-    "full_name": "Fake Name",
-    "phone_number": "+251900000000",
-    "pin": "123456"
+    "phone_number": "+251911234567"
 })
 check("Unregistered Fayda FIN rejected (400)", r.get("_status") == 400, str(r))
 
-# Request registration OTP with wrong phone number -> Should fail
+# Step 1: Request registration OTP with wrong phone number -> Should fail
 r = req("POST", "/v1/superapp/users/register/request-otp", {
     "fin": "12345678901234",
     "phone_number": "+251999999999"  # Mismatched phone!
 })
 check("Mismatched Fayda phone number rejected (400)", r.get("_status") == 400, str(r))
 
-# Request registration OTP with correct phone number (+251911234567)
+# Step 1: Request registration OTP with correct phone number (+251911234567)
 r = req("POST", "/v1/superapp/users/register/request-otp", {
     "fin": "12345678901234",
     "phone_number": "+251911234567"
 })
-check("Registration OTP requested with verified phone", "session_id" in r, str(r))
+check("Step 1: Registration OTP requested with verified phone", "session_id" in r, str(r))
 reg_session_id = r.get("session_id", "")
 
-r = req("POST", "/v1/superapp/users/register", {
-    "username": "abebe_test_e2e",
-    "fin": "12345678901234",
-    "pin": "123456",
+# Step 2: Verify registration OTP
+r = req("POST", "/v1/superapp/users/register/verify-otp", {
     "session_id": reg_session_id,
     "otp_code": "123456"
 })
-check("Sender registered with Fayda OTP verification", "username" in r, str(r))
+check("Step 2: Registration OTP verified -> registration_token issued", "registration_token" in r, str(r))
+reg_token = r.get("registration_token", "")
+check("Verified FIN in Step 2 response", r.get("fin") == "12345678901234", str(r))
+check("Verified legal name in Step 2 response", r.get("full_name") == "Abebe Girma Tadesse", str(r))
+
+# Step 3: Complete registration (requires only registration_token, username, and pin — NO fin or phone needed!)
+r = req("POST", "/v1/superapp/users/register/complete", {
+    "registration_token": reg_token,
+    "username": "abebe_test_e2e",
+    "pin": "123456"
+})
+check("Step 3: Registration completed using registration_token", "username" in r, str(r))
 sender_username = r.get("username", "")
 check("Username formatted with @eupi", sender_username == "abebe_test_e2e@eupi", str(r))
-check("Legal name autopopulated from Fayda", r.get("full_name") == "Abebe Girma Tadesse", str(r))
+check("Legal name autopopulated from Step 2 token", r.get("full_name") == "Abebe Girma Tadesse", str(r))
 
-r = req("POST", "/v1/superapp/users/register", {
-    "username": "selamawit_e2e",
+# Recipient Registration (Selamawit) via 3-Step Flow
+r = req("POST", "/v1/superapp/users/register/request-otp", {
     "fin": "23456789012345",
-    "full_name": "Selamawit Bekele Hailu",
-    "phone_number": "+251922345678",
+    "phone_number": "+251922345678"
+})
+recip_session_id = r.get("session_id", "")
+
+r = req("POST", "/v1/superapp/users/register/verify-otp", {
+    "session_id": recip_session_id,
+    "otp_code": "123456"
+})
+recip_reg_token = r.get("registration_token", "")
+
+r = req("POST", "/v1/superapp/users/register/complete", {
+    "registration_token": recip_reg_token,
+    "username": "selamawit_e2e",
     "pin": "654321"
 })
-check("Recipient registered", "username" in r, str(r))
+check("Recipient registered via 3-Step flow", "username" in r, str(r))
 recip_username = r.get("username", "")
 
 # ── 6. PIN Login & Session Generation ──
 print("\n── 6. PIN Login & Session Token Generation ──")
+# Login with base handle without @eupi postfix!
 r = req("POST", "/v1/superapp/users/login", {
-    "username": sender_username,
+    "username": "abebe_test_e2e",
     "pin": "123456"
 })
-check("Sender PIN Login successful", "session_token" in r, str(r))
+check("Sender PIN Login successful (without @eupi)", "session_token" in r, str(r))
 sender_session_token = r.get("session_token", "")
 
 r = req("POST", "/v1/superapp/users/login", {

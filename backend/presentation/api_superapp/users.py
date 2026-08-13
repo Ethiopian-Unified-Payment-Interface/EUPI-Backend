@@ -44,8 +44,63 @@ class RegistrationOtpResponse(BaseModel):
     message: str = Field(..., description="Status message.", examples=["OTP dispatched to registered phone number."])
 
 
+class VerifyRegistrationOtpRequest(BaseModel):
+    """Payload to verify the registration OTP (Step 2 of 3)."""
+
+    session_id: str = Field(
+        ...,
+        description="Fayda OTP session ID received from Step 1 (/register/request-otp).",
+        examples=["FAYDA-SES-A1B2C3D4E5F67890"],
+    )
+    otp_code: str = Field(
+        ...,
+        description="6-digit OTP code received on phone.",
+        examples=["123456"],
+        min_length=6,
+        max_length=6,
+    )
+
+
+class VerifyRegistrationOtpResponse(BaseModel):
+    """Response payload after successful OTP verification (Step 2 of 3)."""
+
+    registration_token: str = Field(
+        ...,
+        description="Signed verification token carrying identity attributes to submit in Step 3.",
+        examples=["eyJhbGciOiJIUzI1..."],
+    )
+    fin: str = Field(..., description="Verified Fayda FIN.", examples=["12345678901234"])
+    full_name: str = Field(..., description="Legal name from Fayda.", examples=["Abebe Girma Tadesse"])
+    phone_number: str = Field(..., description="Verified phone number.", examples=["+251911234567"])
+    message: str = Field(..., description="Status message.", examples=["OTP verified successfully. Proceed to complete registration."])
+
+
+class CompleteRegistrationRequest(BaseModel):
+    """Payload to complete user registration (Step 3 of 3)."""
+
+    registration_token: str = Field(
+        ...,
+        description="Verified registration token from Step 2 (/register/verify-otp).",
+        examples=["eyJhbGciOiJIUzI1..."],
+    )
+    username: str = Field(
+        ...,
+        description="Desired base handle (3-30 chars, alphanumeric and underscores). The system will append @eupi.",
+        examples=["abebe_girma"],
+        min_length=3,
+        max_length=30,
+    )
+    pin: str = Field(
+        ...,
+        description="6-digit numeric login PIN.",
+        examples=["123456"],
+        min_length=6,
+        max_length=6,
+    )
+
+
 class UserRegisterRequest(BaseModel):
-    """Payload to register a new Super App user after Fayda eKYC."""
+    """Payload to register a new Super App user."""
 
     username: str = Field(
         ...,
@@ -54,23 +109,6 @@ class UserRegisterRequest(BaseModel):
         min_length=3,
         max_length=30,
     )
-    fin: str = Field(
-        ...,
-        description="14-digit Fayda Identification Number (must exist in the registry).",
-        examples=["12345678901234"],
-        min_length=14,
-        max_length=14,
-    )
-    full_name: str | None = Field(
-        default=None,
-        description="Full legal name (autopopulated from Fayda registry if omitted).",
-        examples=["Abebe Girma Tadesse"],
-    )
-    phone_number: str | None = Field(
-        default=None,
-        description="E.164 phone number (autopopulated from Fayda registry if omitted).",
-        examples=["+251911234567"],
-    )
     pin: str = Field(
         ...,
         description="6-digit numeric PIN for app login authentication.",
@@ -78,9 +116,29 @@ class UserRegisterRequest(BaseModel):
         min_length=6,
         max_length=6,
     )
+    registration_token: str | None = Field(
+        default=None,
+        description="Verified registration token from Step 2 (/register/verify-otp).",
+        examples=["eyJhbGciOiJIUzI1..."],
+    )
+    fin: str | None = Field(
+        default=None,
+        description="14-digit Fayda Identification Number (if registering directly without registration_token).",
+        examples=["12345678901234"],
+    )
+    full_name: str | None = Field(
+        default=None,
+        description="Full legal name (autopopulated if omitted).",
+        examples=["Abebe Girma Tadesse"],
+    )
+    phone_number: str | None = Field(
+        default=None,
+        description="E.164 phone number (autopopulated if omitted).",
+        examples=["+251911234567"],
+    )
     session_id: str | None = Field(
         default=None,
-        description="Optional Fayda OTP session ID (if performing 2-step OTP registration).",
+        description="Optional Fayda OTP session ID.",
         examples=["FAYDA-SES-A1B2C3D4E5F67890"],
     )
     otp_code: str | None = Field(
@@ -113,8 +171,8 @@ class PinLoginRequest(BaseModel):
 
     username: str = Field(
         ...,
-        description="Username of the account to log into.",
-        examples=["abebe_girma@eupi"],
+        description="Username handle (e.g. 'abebe_girma'). The @eupi postfix is automatically handled.",
+        examples=["abebe_girma"],
     )
     pin: str = Field(
         ...,
@@ -139,8 +197,8 @@ class ChangePinRequest(BaseModel):
 
     username: str = Field(
         ...,
-        description="Full Super App username (with @eupi suffix).",
-        examples=["abebe_girma@eupi"],
+        description="Username handle (e.g. 'abebe_girma'). The @eupi postfix is automatically handled.",
+        examples=["abebe_girma"],
     )
     current_pin: str = Field(
         ...,
@@ -170,10 +228,11 @@ class MessageResponse(BaseModel):
     "/register/request-otp",
     response_model=RegistrationOtpResponse,
     status_code=status.HTTP_200_OK,
-    summary="1. Request Registration OTP (Fayda eKYC)",
+    summary="Step 1 of 3: Request Registration OTP",
     description=(
-        "**Step 1 of Registration**: Dispatches a 6-digit OTP to the phone number registered to the Fayda FIN.\n\n"
-        "Returns a `session_id` to pass alongside the OTP code when completing registration."
+        "**Step 1 of 3-Step Registration**: Accepts `fin` and `phone_number`.\n\n"
+        "Verifies that the phone number matches the Fayda National Registry record for this FIN. "
+        "Dispatches a 6-digit OTP and returns a `session_id` for Step 2."
     ),
 )
 def request_registration_otp(body: RegistrationOtpRequest) -> RegistrationOtpResponse:
@@ -187,35 +246,59 @@ def request_registration_otp(body: RegistrationOtpRequest) -> RegistrationOtpRes
 
     return RegistrationOtpResponse(
         session_id=session_id,
-        message="Fayda eKYC OTP dispatched to the phone number registered with this National ID.",
+        message="Fayda eKYC OTP dispatched to registered phone number. Pass session_id and otp_code to /register/verify-otp.",
     )
 
 
 @router.post(
-    "/register",
-    response_model=SuperAppUserResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="2. Register Super App User",
+    "/register/verify-otp",
+    response_model=VerifyRegistrationOtpResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Step 2 of 3: Verify Registration OTP",
     description=(
-        "**Creates a new Super App platform account.**\n\n"
-        "Verifies that the Fayda FIN exists in the National Registry and checks optional OTP verification. "
-        "The username must be unique across the platform (3-30 characters, alphanumeric + underscores).\n\n"
-        "**Test Hint**: Use FIN `12345678901234` (Abebe Girma Tadesse) or `23456789012345` (Selamawit Bekele Hailu)."
+        "**Step 2 of 3-Step Registration**: Accepts `session_id` and `otp_code`.\n\n"
+        "Validates the OTP code sent in Step 1. On success, returns a signed `registration_token` "
+        "which securely encodes the verified citizen identity attributes (FIN, legal name, phone number) for Step 3."
     ),
 )
-def register_user(body: UserRegisterRequest) -> SuperAppUserResponse:
+def verify_registration_otp(body: VerifyRegistrationOtpRequest) -> VerifyRegistrationOtpResponse:
     from backend.main import get_user_registration_service
     service = get_user_registration_service()
 
     try:
-        user = service.register_user(
+        result = service.verify_registration_otp(session_id=body.session_id, otp_code=body.otp_code)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    return VerifyRegistrationOtpResponse(
+        registration_token=result["registration_token"],
+        fin=result["fin"],
+        full_name=result["full_name"],
+        phone_number=result["phone_number"],
+        message="OTP verified successfully. Submit registration_token, username, and pin to /register/complete.",
+    )
+
+
+@router.post(
+    "/register/complete",
+    response_model=SuperAppUserResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Step 3 of 3: Complete User Registration",
+    description=(
+        "**Step 3 of 3-Step Registration**: Accepts `registration_token`, `username`, and 6-digit `pin`.\n\n"
+        "Does NOT require entering FIN or phone number again! Decodes the verified identity from Step 2, "
+        "validates username uniqueness, and creates the Super App user profile."
+    ),
+)
+def complete_registration(body: CompleteRegistrationRequest) -> SuperAppUserResponse:
+    from backend.main import get_user_registration_service
+    service = get_user_registration_service()
+
+    try:
+        user = service.complete_registration(
+            registration_token=body.registration_token,
             username=body.username,
-            fin=body.fin,
-            full_name=body.full_name,
-            phone_number=body.phone_number,
             pin=body.pin,
-            session_id=body.session_id,
-            otp_code=body.otp_code,
         )
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
