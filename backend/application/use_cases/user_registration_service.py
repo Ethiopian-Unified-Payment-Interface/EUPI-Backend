@@ -37,42 +37,111 @@ class UserRegistrationService:
       - user_repo: A UserRepositoryPort for persisting user accounts.
     """
 
-    def __init__(self, user_repo: UserRepositoryPort) -> None:
+    def __init__(
+        self,
+        user_repo: UserRepositoryPort,
+        identity_port: IdentityPort | None = None,
+    ) -> None:
         self._user_repo = user_repo
+        self._identity_port = identity_port
 
     @staticmethod
     def _hash_pin(pin: str) -> str:
         """Hash a 6-digit PIN with SHA-256. Never store plaintext PINs."""
         return hashlib.sha256(pin.encode()).hexdigest()
 
+    def request_registration_otp(self, fin: str, phone_number: str) -> str:
+        """
+        Request a Fayda eKYC OTP sent to the phone number registered to the FIN.
+
+        Args:
+            fin:          14-digit Fayda Identification Number.
+            phone_number: E.164 phone number to verify against Fayda registry.
+
+        Returns:
+            Fayda OTP session_id.
+
+        Raises:
+            FaydaIdentityNotFoundError: If the FIN is not in Fayda.
+            FaydaPhoneMismatchError:    If the entered phone number does not match Fayda.
+        """
+        from backend.domain.models.identity import FaydaVerifyRequest
+        from backend.infrastructure.mock_data.fayda_registry import get_identity
+
+        identity = get_identity(fin)
+        if identity is None:
+            raise FaydaIdentityNotFoundError(
+                f"FIN '{fin}' is not registered in the Fayda National Identity System."
+            )
+
+        # Verify entered phone number matches the phone number registered to that FIN in Fayda
+        fayda_phone_norm = identity["phone_number"].strip().replace(" ", "")
+        input_phone_norm = phone_number.strip().replace(" ", "")
+        if fayda_phone_norm != input_phone_norm:
+            raise FaydaPhoneMismatchError(
+                f"Phone number '{phone_number}' does not match the phone number registered "
+                f"to FIN '{fin}' in the Fayda National Identity System."
+            )
+
+        if self._identity_port is None:
+            raise RuntimeError("Identity port not initialized.")
+
+        req = FaydaVerifyRequest(
+            fin=fin,
+            phone_number=identity["phone_number"],
+            consent_scope="superapp:register",
+        )
+        return self._identity_port.initiate_kyc_verification(req)
+
     def register_user(
         self,
         username: str,
         fin: str,
-        full_name: str,
-        phone_number: str,
-        pin: str,
+        full_name: str | None = None,
+        phone_number: str | None = None,
+        pin: str = "123456",
+        session_id: str | None = None,
+        otp_code: str | None = None,
     ) -> SuperAppUser:
         """
-        Register a new super app user.
-
-        The caller (presentation layer) must have already verified the FIN
-        via the Fayda eKYC flow before calling this method.
+        Register a new super app user after verifying their Fayda FIN identity and optional OTP.
 
         Args:
-            username:     Unique handle (3-30 chars, alphanumeric + underscores).
+            username:     Base handle (3-30 chars, alphanumeric + underscores).
             fin:          14-digit Fayda Identification Number.
-            full_name:    Legal name from Fayda registry.
+            full_name:    Legal name (pulled/verified from Fayda registry).
             phone_number: E.164 phone number.
+            pin:          6-digit numeric login PIN.
+            session_id:   Fayda OTP session ID (optional for OTP verification).
+            otp_code:     6-digit OTP code sent to customer's phone (optional).
 
         Returns:
             A fully populated SuperAppUser domain object.
-
-        Raises:
-            InvalidUsernameError: If username doesn't match format constraints.
-            UsernameAlreadyTakenError: If username is already registered.
-            FINAlreadyRegisteredError: If FIN is already linked to an account.
         """
+        from backend.infrastructure.mock_data.fayda_registry import get_identity
+        fayda_identity = get_identity(fin)
+
+        if fayda_identity is None:
+            raise FaydaIdentityNotFoundError(
+                f"FIN '{fin}' is not registered in the Fayda National Identity System. "
+                "Account creation denied."
+            )
+
+        # 1. If OTP session_id and otp_code are provided, verify with FaydaAdapter
+        if session_id and otp_code:
+            if self._identity_port is None:
+                raise RuntimeError("IdentityPort is not configured.")
+            kyc_result = self._identity_port.confirm_kyc_otp(
+                session_id=session_id,
+                otp_code=otp_code,
+                fin=fin,
+            )
+            verified_full_name = kyc_result.full_name
+            verified_phone = fayda_identity["phone_number"]
+        else:
+            verified_full_name = full_name or fayda_identity["full_name"]
+            verified_phone = phone_number or fayda_identity["phone_number"]
+
         # Validate username format
         if not _USERNAME_PATTERN.match(username):
             raise InvalidUsernameError(
@@ -103,8 +172,8 @@ class UserRegistrationService:
         user = SuperAppUser(
             username=full_username,
             fin=fin,
-            full_name=full_name,
-            phone_number=phone_number,
+            full_name=verified_full_name,
+            phone_number=verified_phone,
             pin_hash=self._hash_pin(pin),
             created_at=datetime.now(tz=timezone.utc),
             is_active=True,
@@ -233,6 +302,12 @@ class UserRegistrationService:
 # Custom exceptions
 class RegistrationError(Exception):
     """Base exception for user registration errors."""
+
+class FaydaIdentityNotFoundError(RegistrationError):
+    """Raised when the FIN is not found in the Fayda National Identity System."""
+
+class FaydaPhoneMismatchError(RegistrationError):
+    """Raised when the entered phone number does not match the Fayda registered phone number."""
 
 class InvalidUsernameError(RegistrationError):
     """Raised when a username doesn't meet format requirements."""

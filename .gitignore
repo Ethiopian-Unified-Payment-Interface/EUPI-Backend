@@ -6,3 +6,5 @@ kifiya_gateway.db
 .DS_Store
 
 temp.md
+requirements.txt
+architecture_spec.md

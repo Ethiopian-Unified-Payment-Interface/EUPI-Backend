@@ -21,6 +21,12 @@ FAYDA_REGISTRY = {
         "date_of_birth": "1990-05-15",
         "gender": "MALE"
     },
+    "21872187218777": {
+        "full_name": "Daniel Kebede Woldetsadik",
+        "phone_number": "+251904267039",
+        "date_of_birth": "2003-03-11",
+        "gender": "MALE"
+        },
     "23456789012345": {
         "full_name": "Selamawit Bekele Hailu",
         "phone_number": "+251922345678",

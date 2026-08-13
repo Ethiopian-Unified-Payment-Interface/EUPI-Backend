@@ -20,6 +20,30 @@ router = APIRouter(prefix="/superapp/users", tags=["Super App — User Managemen
 
 # ── Request / Response Schemas ─────────────────────────────────────────────────
 
+class RegistrationOtpRequest(BaseModel):
+    """Request payload to dispatch a Fayda eKYC OTP for user registration."""
+
+    fin: str = Field(
+        ...,
+        description="14-digit Fayda Identification Number.",
+        examples=["12345678901234"],
+        min_length=14,
+        max_length=14,
+    )
+    phone_number: str = Field(
+        ...,
+        description="E.164 phone number to verify against the Fayda registry.",
+        examples=["+251911234567"],
+    )
+
+
+class RegistrationOtpResponse(BaseModel):
+    """Response payload after dispatching a registration OTP."""
+
+    session_id: str = Field(..., description="Fayda OTP session ID.", examples=["FAYDA-SES-A1B2C3D4E5F67890"])
+    message: str = Field(..., description="Status message.", examples=["OTP dispatched to registered phone number."])
+
+
 class UserRegisterRequest(BaseModel):
     """Payload to register a new Super App user after Fayda eKYC."""
 
@@ -37,14 +61,14 @@ class UserRegisterRequest(BaseModel):
         min_length=14,
         max_length=14,
     )
-    full_name: str = Field(
-        ...,
-        description="Full legal name from Fayda eKYC verification.",
+    full_name: str | None = Field(
+        default=None,
+        description="Full legal name (autopopulated from Fayda registry if omitted).",
         examples=["Abebe Girma Tadesse"],
     )
-    phone_number: str = Field(
-        ...,
-        description="E.164 phone number.",
+    phone_number: str | None = Field(
+        default=None,
+        description="E.164 phone number (autopopulated from Fayda registry if omitted).",
         examples=["+251911234567"],
     )
     pin: str = Field(
@@ -53,6 +77,16 @@ class UserRegisterRequest(BaseModel):
         examples=["123456"],
         min_length=6,
         max_length=6,
+    )
+    session_id: str | None = Field(
+        default=None,
+        description="Optional Fayda OTP session ID (if performing 2-step OTP registration).",
+        examples=["FAYDA-SES-A1B2C3D4E5F67890"],
+    )
+    otp_code: str | None = Field(
+        default=None,
+        description="Optional 6-digit OTP code received on phone.",
+        examples=["123456"],
     )
 
 
@@ -133,13 +167,38 @@ class MessageResponse(BaseModel):
 # ── Route Handlers ─────────────────────────────────────────────────────────────
 
 @router.post(
+    "/register/request-otp",
+    response_model=RegistrationOtpResponse,
+    status_code=status.HTTP_200_OK,
+    summary="1. Request Registration OTP (Fayda eKYC)",
+    description=(
+        "**Step 1 of Registration**: Dispatches a 6-digit OTP to the phone number registered to the Fayda FIN.\n\n"
+        "Returns a `session_id` to pass alongside the OTP code when completing registration."
+    ),
+)
+def request_registration_otp(body: RegistrationOtpRequest) -> RegistrationOtpResponse:
+    from backend.main import get_user_registration_service
+    service = get_user_registration_service()
+
+    try:
+        session_id = service.request_registration_otp(fin=body.fin, phone_number=body.phone_number)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    return RegistrationOtpResponse(
+        session_id=session_id,
+        message="Fayda eKYC OTP dispatched to the phone number registered with this National ID.",
+    )
+
+
+@router.post(
     "/register",
     response_model=SuperAppUserResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Register Super App User",
+    summary="2. Register Super App User",
     description=(
         "**Creates a new Super App platform account.**\n\n"
-        "Requires a Fayda FIN that has passed eKYC verification and a 6-digit PIN for app login. "
+        "Verifies that the Fayda FIN exists in the National Registry and checks optional OTP verification. "
         "The username must be unique across the platform (3-30 characters, alphanumeric + underscores).\n\n"
         "**Test Hint**: Use FIN `12345678901234` (Abebe Girma Tadesse) or `23456789012345` (Selamawit Bekele Hailu)."
     ),
@@ -155,6 +214,8 @@ def register_user(body: UserRegisterRequest) -> SuperAppUserResponse:
             full_name=body.full_name,
             phone_number=body.phone_number,
             pin=body.pin,
+            session_id=body.session_id,
+            otp_code=body.otp_code,
         )
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))

@@ -109,17 +109,43 @@ r = req("GET", "/v1/accounts", token=sender_fayda_token)
 check("AIS returned accounts", isinstance(r, list) and len(r) > 0, str(r))
 
 # ── 5. Register Super App Users ──
-print("\n── 5. Register Super App Users (with 6-Digit PIN) ──")
+print("\n── 5. Register Super App Users (with 6-Digit PIN, Fayda FIN Check & OTP) ──")
+# Attempt registration with unregistered FIN -> Should fail
+r = req("POST", "/v1/superapp/users/register", {
+    "username": "fake_user_test",
+    "fin": "99999999999999",  # Not in Fayda Registry!
+    "full_name": "Fake Name",
+    "phone_number": "+251900000000",
+    "pin": "123456"
+})
+check("Unregistered Fayda FIN rejected (400)", r.get("_status") == 400, str(r))
+
+# Request registration OTP with wrong phone number -> Should fail
+r = req("POST", "/v1/superapp/users/register/request-otp", {
+    "fin": "12345678901234",
+    "phone_number": "+251999999999"  # Mismatched phone!
+})
+check("Mismatched Fayda phone number rejected (400)", r.get("_status") == 400, str(r))
+
+# Request registration OTP with correct phone number (+251911234567)
+r = req("POST", "/v1/superapp/users/register/request-otp", {
+    "fin": "12345678901234",
+    "phone_number": "+251911234567"
+})
+check("Registration OTP requested with verified phone", "session_id" in r, str(r))
+reg_session_id = r.get("session_id", "")
+
 r = req("POST", "/v1/superapp/users/register", {
     "username": "abebe_test_e2e",
     "fin": "12345678901234",
-    "full_name": "Abebe Girma Tadesse",
-    "phone_number": "+251911234567",
-    "pin": "123456"
+    "pin": "123456",
+    "session_id": reg_session_id,
+    "otp_code": "123456"
 })
-check("Sender registered", "username" in r, str(r))
+check("Sender registered with Fayda OTP verification", "username" in r, str(r))
 sender_username = r.get("username", "")
 check("Username formatted with @eupi", sender_username == "abebe_test_e2e@eupi", str(r))
+check("Legal name autopopulated from Fayda", r.get("full_name") == "Abebe Girma Tadesse", str(r))
 
 r = req("POST", "/v1/superapp/users/register", {
     "username": "selamawit_e2e",

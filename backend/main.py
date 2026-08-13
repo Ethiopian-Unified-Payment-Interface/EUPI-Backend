@@ -145,7 +145,7 @@ async def lifespan(app: FastAPI):
     )
 
     # 6. Super App services
-    _user_registration_service = UserRegistrationService(user_repo=_user_repo)
+    _user_registration_service = UserRegistrationService(user_repo=_user_repo, identity_port=_identity_port)
     _account_linking_service = AccountLinkingService(
         link_repo=_account_link_repo,
         user_repo=_user_repo,
