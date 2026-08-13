@@ -35,10 +35,10 @@ class LinkedAccount(BaseModel):
         description="Gateway-assigned unique link identifier (UUID format).",
         examples=["6ba7b810-9dad-11d1-80b4-00c04fd430c8"],
     )
-    user_id: str = Field(
+    username: str = Field(
         ...,
-        description="References SuperAppUser.user_id.",
-        examples=["550e8400-e29b-41d4-a716-446655440000"],
+        description="References SuperAppUser.username (the owner of this linked account).",
+        examples=["abebe_girma@eupi"],
     )
     bank_id: BankID = Field(
         ...,
@@ -71,7 +71,7 @@ class LinkedAccount(BaseModel):
         "json_schema_extra": {
             "example": {
                 "link_id": "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
-                "user_id": "550e8400-e29b-41d4-a716-446655440000",
+                "username": "abebe_girma@eupi",
                 "bank_id": "COOP",
                 "account_number": "1000123456789",
                 "account_name": "Abebe Girma",

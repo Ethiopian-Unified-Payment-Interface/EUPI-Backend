@@ -146,10 +146,17 @@ class CoopCBSAdapter(BankPort):
         available = Decimal(str(round(rng.uniform(8_000, 120_000), 2)))
         ledger = available + Decimal(str(round(rng.uniform(100, 5_000), 2)))
 
+        if account_number == "1000987654321":
+            acct_name = "SELAMAWIT BEKELE HAILU"
+        elif account_number in ("1000234567890", "1000111222333"):
+            acct_name = "ABEBE GIRMA TADESSE"
+        else:
+            acct_name = "ABEBE GIRMA TADESSE"
+
         # Coop's raw API format (proprietary field names)
         return {
             "acctNo": account_number,
-            "acctName": "ABEBE GIRMA TADESSE",
+            "acctName": acct_name,
             "acctType": rng.choice(["SAV", "CUR"]),
             "branchCd": rng.choice(["ADD001", "ADD015", "NZR003", "AWA007"]),
             "currCd": "ETB",

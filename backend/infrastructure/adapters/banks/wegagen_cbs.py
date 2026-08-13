@@ -122,10 +122,17 @@ class WegagenCBSAdapter(BankPort):
         available = Decimal(str(round(rng.uniform(3_000, 60_000), 2)))
         ledger = available + Decimal(str(round(rng.uniform(50, 2_000), 2)))
 
+        if account_number == "1000987654321":
+            holder_name = "SELAMAWIT BEKELE HAILU"
+        elif account_number in ("1000234567890", "1000111222333"):
+            holder_name = "ABEBE GIRMA TADESSE"
+        else:
+            holder_name = "ABEBE GIRMA TADESSE"
+
         # PascalCase keys mirror Wegagen's XML <Element> naming
         return {
             "AccountNumber": account_number,
-            "AccountHolderName": "ABEBE GIRMA TADESSE",
+            "AccountHolderName": holder_name,
             "AccountCategory": rng.choice(["S", "C"]),  # S=Savings, C=Current
             "BranchCode": rng.choice(["WGB-ADD01", "WGB-ADD05", "WGB-HAW01"]),
             "Currency": "ETB",

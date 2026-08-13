@@ -126,9 +126,16 @@ class CBECBSAdapter(BankPort):
         account_class = rng.choice(["PERSONAL_SAVINGS", "CURRENT", "SALARY"])
 
         # CBE's REST response format
+        if account_number == "1000987654321":
+            holder_name = "SELAMAWIT BEKELE HAILU"
+        elif account_number in ("1000234567890", "1000111222333"):
+            holder_name = "ABEBE GIRMA TADESSE"
+        else:
+            holder_name = "ABEBE GIRMA TADESSE"
+
         return {
             "account_number": account_number,
-            "holder_name": "ABEBE GIRMA TADESSE",
+            "holder_name": holder_name,
             "account_class": account_class,
             "branch_code": rng.choice(["CBE001", "CBE004", "CBE012", "CBE089"]),
             "currency_code": "ETB",

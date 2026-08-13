@@ -9,9 +9,11 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
+from backend.domain.models.user import SuperAppUser
+from backend.presentation.api_superapp.auth_deps import get_current_superapp_user
 from backend.presentation.api_v1.payments import (
     PaymentResponse,
     _payment_store,
@@ -26,15 +28,15 @@ router = APIRouter(prefix="/superapp/transfers", tags=["Super App — P2P Transf
 class P2PTransferRequest(BaseModel):
     """Payload to initiate a handle-based peer-to-peer money transfer."""
 
-    sender_user_id: str = Field(
+    sender_username: str = Field(
         ...,
-        description="Sender's Super App user ID.",
-        examples=["550e8400-e29b-41d4-a716-446655440000"],
+        description="Sender's Super App username (with @eupi suffix).",
+        examples=["abebe_girma@eupi"],
     )
     recipient_username: str = Field(
         ...,
         description="Recipient's unique handle (looked up to find their default receiving account).",
-        examples=["selamawit_b"],
+        examples=["selamawit_b@eupi"],
     )
     amount: Decimal = Field(
         ...,
@@ -63,21 +65,30 @@ class P2PTransferRequest(BaseModel):
     summary="Send Money by Username",
     description=(
         "**Handle-Based P2P Transfer**\n\n"
-        "Resolves the recipient by username, finds the sender's default sending account "
-        "and the recipient's default receiving account, selects the optimal banking rail "
-        "via Smart Router, and creates a Payment object in `PENDING` state.\n\n"
+        "Requires an active session header. Resolves the recipient by username, finds the sender's default sending account "
+        "and the recipient's default receiving account, checks for sufficient balance in the sending account, selects the "
+        "optimal banking rail via Smart Router, and creates a Payment object in `PENDING` state.\n\n"
         "The resulting payment follows the standard PIS lifecycle "
         "(verify → order → callback) for settlement."
     ),
 )
-def initiate_transfer(body: P2PTransferRequest) -> PaymentResponse:
+def initiate_transfer(
+    body: P2PTransferRequest,
+    current_user: SuperAppUser = Depends(get_current_superapp_user),
+) -> PaymentResponse:
     from backend.main import get_superapp_transfer_service, get_repo
     service = get_superapp_transfer_service()
     repo = get_repo()
 
+    if current_user.username != body.sender_username:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cannot initiate transfer on behalf of another user.",
+        )
+
     try:
         payment = service.initiate_transfer(
-            sender_user_id=body.sender_user_id,
+            sender_username=body.sender_username,
             recipient_username=body.recipient_username,
             amount=body.amount,
             currency=body.currency,

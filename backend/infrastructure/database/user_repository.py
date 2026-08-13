@@ -51,7 +51,6 @@ class SQLiteUserRepository(UserRepositoryPort):
 
     def create_user(self, user: SuperAppUser) -> None:
         record = UserRecord(
-            user_id=user.user_id,
             username=user.username,
             fin=user.fin,
             full_name=user.full_name,
@@ -63,10 +62,6 @@ class SQLiteUserRepository(UserRepositoryPort):
         with self._session() as session:
             session.add(record)
 
-    def get_by_id(self, user_id: str) -> SuperAppUser | None:
-        with self._session() as session:
-            record = session.get(UserRecord, user_id)
-            return self._to_domain(record) if record else None
 
     def get_by_username(self, username: str) -> SuperAppUser | None:
         with self._session() as session:
@@ -91,7 +86,6 @@ class SQLiteUserRepository(UserRepositoryPort):
     @staticmethod
     def _to_domain(record: UserRecord) -> SuperAppUser:
         return SuperAppUser(
-            user_id=record.user_id,
             username=record.username,
             fin=record.fin,
             full_name=record.full_name,
@@ -101,9 +95,9 @@ class SQLiteUserRepository(UserRepositoryPort):
             pin_hash=record.pin_hash,
         )
 
-    def update_pin_hash(self, user_id: str, pin_hash: str) -> None:
+    def update_pin_hash(self, username: str, pin_hash: str) -> None:
         with self._session() as session:
-            record = session.get(UserRecord, user_id)
+            record = session.get(UserRecord, username)
             if record is None:
-                raise ValueError(f"User '{user_id}' not found.")
+                raise ValueError(f"User '{username}' not found.")
             record.pin_hash = pin_hash

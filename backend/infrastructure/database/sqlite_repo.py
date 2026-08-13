@@ -183,6 +183,17 @@ class SQLiteRepository:
             record = session.get(ConsentTokenRecord, jti)
             if record:
                 record.is_revoked = True
+            else:
+                now = datetime.now()
+                session.add(ConsentTokenRecord(
+                    jti=jti,
+                    fin="",
+                    kyc_level="STANDARD",
+                    scopes="[]",
+                    issued_at=now,
+                    expires_at=now,
+                    is_revoked=True,
+                ))
 
     # ══════════════════════════════════════════════════════════════════════════
     # Webhook Event Log

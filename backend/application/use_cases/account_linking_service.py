@@ -52,7 +52,7 @@ class AccountLinkingService:
 
     def link_account(
         self,
-        user_id: str,
+        username: str,
         bank_id: BankID,
         account_number: str,
     ) -> LinkedAccount:
@@ -68,7 +68,7 @@ class AccountLinkingService:
         and receiving.
 
         Args:
-            user_id:        The super app user's unique ID.
+            username:       The super app user's unique username.
             bank_id:        The bank where the account is held.
             account_number: The full account number to link.
 
@@ -76,15 +76,15 @@ class AccountLinkingService:
             The newly created LinkedAccount domain object.
 
         Raises:
-            UserNotFoundError: If user_id doesn't match any registered user.
+            UserNotFoundError: If username doesn't match any registered user.
             BankNotSupportedError: If bank_id has no registered adapter.
             AccountVerificationError: If the bank port cannot verify the account.
         """
         # Verify user exists
-        user = self._user_repo.get_by_id(user_id)
+        user = self._user_repo.get_by_username(username)
         if user is None:
             raise UserNotFoundError(
-                f"No super app user found with user_id '{user_id}'."
+                f"No super app user found with username '{username}'."
             )
 
         # Verify bank is supported
@@ -102,13 +102,22 @@ class AccountLinkingService:
                 f"Could not verify account '{account_number}' at {bank_id.value}: {exc}"
             )
 
+        # Verify account ownership matches user's Fayda verified legal name
+        user_name_norm = user.full_name.strip().upper()
+        bank_name_norm = account.account_name.strip().upper()
+        if user_name_norm != bank_name_norm:
+            raise AccountOwnerMismatchError(
+                f"Bank account '{account_number}' at {bank_id.value} is registered under "
+                f"'{account.account_name}', which does not match your Fayda National ID identity '{user.full_name}'."
+            )
+
         # Check if this is the user's first linked account
-        existing_links = self._link_repo.list_for_user(user_id)
+        existing_links = self._link_repo.list_for_user(username)
         is_first = len(existing_links) == 0
 
         link = LinkedAccount(
             link_id=str(uuid.uuid4()),
-            user_id=user_id,
+            username=username,
             bank_id=bank_id,
             account_number=account_number,
             account_name=account.account_name,
@@ -122,7 +131,7 @@ class AccountLinkingService:
         logger.info(
             "Account linked",
             extra={
-                "user_id": user_id,
+                "username": username,
                 "bank_id": bank_id.value,
                 "link_id": link.link_id,
                 "is_first": is_first,
@@ -131,21 +140,62 @@ class AccountLinkingService:
 
         return link
 
-    def list_linked_accounts(self, user_id: str) -> list[LinkedAccount]:
+    def list_linked_accounts(self, username: str) -> list[LinkedAccount]:
         """
         Retrieve all linked accounts for a user.
 
         Args:
-            user_id: The super app user's unique ID.
+            username: The super app user's unique username.
 
         Returns:
             A list of LinkedAccount domain objects.
         """
-        return self._link_repo.list_for_user(user_id)
+        return self._link_repo.list_for_user(username)
+
+    def sync_user_accounts(self, username: str) -> list[dict]:
+        """
+        Sync connected bank accounts and return live balance information.
+
+        Args:
+            username: The super app user's unique username.
+
+        Returns:
+            A list of dicts with live account balance details.
+        """
+        links = self._link_repo.list_for_user(username)
+        synced = []
+        for link in links:
+            port = self._bank_ports.get(link.bank_id)
+            if port is not None:
+                try:
+                    acct = port.get_balance(link.account_number)
+                    available_balance = acct.available_balance
+                    ledger_balance = acct.ledger_balance
+                except Exception:
+                    available_balance = Decimal("0.00")
+                    ledger_balance = Decimal("0.00")
+            else:
+                available_balance = Decimal("0.00")
+                ledger_balance = Decimal("0.00")
+
+            synced.append({
+                "link_id": link.link_id,
+                "username": link.username,
+                "bank_id": link.bank_id.value,
+                "account_number": link.account_number,
+                "account_name": link.account_name,
+                "available_balance": available_balance,
+                "ledger_balance": ledger_balance,
+                "currency": "ETB",
+                "is_default_sending": link.is_default_sending,
+                "is_default_receiving": link.is_default_receiving,
+                "linked_at": link.linked_at,
+            })
+        return synced
 
     def set_default_account(
         self,
-        user_id: str,
+        username: str,
         link_id: str,
         direction: AccountDirection,
     ) -> None:
@@ -153,7 +203,7 @@ class AccountLinkingService:
         Set a linked account as the default for a given direction.
 
         Args:
-            user_id:   The unique ID of the user making the request. Must own
+            username:  The unique username of the user making the request. Must own
                        the linked account being modified.
             link_id:   The unique ID of the linked account.
             direction: SENDING or RECEIVING.
@@ -167,9 +217,9 @@ class AccountLinkingService:
             raise LinkNotFoundError(
                 f"Linked account '{link_id}' not found."
             )
-        if link.user_id != user_id:
+        if link.username != username:
             raise NotOwnerError(
-                f"Linked account '{link_id}' does not belong to user '{user_id}'."
+                f"Linked account '{link_id}' does not belong to user '{username}'."
             )
         self._link_repo.set_default(link_id, direction)
 
@@ -178,14 +228,14 @@ class AccountLinkingService:
             extra={"link_id": link_id, "direction": direction.value},
         )
 
-    def remove_linked_account(self, user_id: str, link_id: str) -> None:
+    def remove_linked_account(self, username: str, link_id: str) -> None:
         """
         Remove a linked account.
 
         Args:
-            user_id: The unique ID of the user making the request. Must own
-                     the linked account being removed.
-            link_id: The unique ID of the linked account to remove.
+            username: The unique username of the user making the request. Must own
+                      the linked account being removed.
+            link_id:  The unique ID of the linked account to remove.
 
         Raises:
             LinkNotFoundError: If the link_id doesn't exist.
@@ -196,13 +246,13 @@ class AccountLinkingService:
             raise LinkNotFoundError(
                 f"Linked account '{link_id}' not found."
             )
-        if link.user_id != user_id:
+        if link.username != username:
             raise NotOwnerError(
-                f"Linked account '{link_id}' does not belong to user '{user_id}'."
+                f"Linked account '{link_id}' does not belong to user '{username}'."
             )
 
         self._link_repo.remove_link(link_id)
-        logger.info("Account link removed", extra={"link_id": link_id, "user_id": user_id})
+        logger.info("Account link removed", extra={"link_id": link_id, "username": username})
 
 
 # Custom exceptions
@@ -215,11 +265,14 @@ class BankNotSupportedError(AccountLinkingError):
 class AccountVerificationError(AccountLinkingError):
     """Raised when the bank port cannot verify the account."""
 
+class AccountOwnerMismatchError(AccountLinkingError):
+    """Raised when the bank account owner does not match the user's Fayda identity."""
+
 class LinkNotFoundError(AccountLinkingError):
     """Raised when a linked account ID doesn't exist."""
 
 class UserNotFoundError(AccountLinkingError):
-    """Raised when the user_id doesn't match any registered user."""
+    """Raised when the username doesn't match any registered user."""
 
 class NotOwnerError(AccountLinkingError):
     """Raised when a user attempts to modify a linked account they don't own."""

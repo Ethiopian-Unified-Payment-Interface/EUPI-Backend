@@ -39,12 +39,12 @@ class AccountLinkRepositoryPort(ABC):
         ...
     
     @abstractmethod
-    def list_for_user(self, user_id: str) -> list[LinkedAccount]:
+    def list_for_user(self, username: str) -> list[LinkedAccount]:
         """
         Retrieve all linked accounts for a given user.
         
         Args:
-            user_id: The unique identifier of the super app user.
+            username: The unique handle of the super app user.
             
         Returns:
             A list of :class:`~domain.models.linked_account.LinkedAccount` objects belonging to the user.

@@ -15,7 +15,6 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-import uuid
 from datetime import datetime, timezone
 
 # Domain imports only
@@ -82,7 +81,8 @@ class UserRegistrationService:
             )
 
         # Check username uniqueness
-        if self._user_repo.username_exists(username):
+        full_username = f"{username}@eupi"
+        if self._user_repo.username_exists(full_username):
             raise UsernameAlreadyTakenError(
                 f"Username '{username}' is already taken."
             )
@@ -101,8 +101,7 @@ class UserRegistrationService:
             )
 
         user = SuperAppUser(
-            user_id=str(uuid.uuid4()),
-            username=username,
+            username=full_username,
             fin=fin,
             full_name=full_name,
             phone_number=phone_number,
@@ -115,7 +114,7 @@ class UserRegistrationService:
 
         logger.info(
             "Super app user registered",
-            extra={"user_id": user.user_id, "username": user.username},
+            extra={"username": user.username},
         )
 
         return user
@@ -147,16 +146,16 @@ class UserRegistrationService:
             full_name=user.full_name,
         )
 
-    def verify_pin(self, username: str, pin: str) -> SuperAppUser:
+    def verify_pin(self, username: str, pin: str) -> tuple[SuperAppUser, str]:
         """
-        Verify a user's PIN for app login.
+        Verify a user's PIN for app login and issue a session JWT.
 
         Args:
             username: The unique handle of the user.
             pin:      The 6-digit PIN entered by the user.
 
         Returns:
-            The authenticated SuperAppUser domain object.
+            A tuple of (authenticated SuperAppUser, session_token).
 
         Raises:
             UserNotFoundError: If no user exists with this username.
@@ -177,29 +176,45 @@ class UserRegistrationService:
         if user.pin_hash is None or user.pin_hash != self._hash_pin(pin):
             raise InvalidPINError("Incorrect PIN.")
 
+        from backend.infrastructure.auth.jwt_handler import create_superapp_session_jwt
+        from backend.main import get_repo
+        token, jti, expires_at = create_superapp_session_jwt(user.username, user.fin)
+        try:
+            get_repo().save_token(
+                jti=jti,
+                fin=user.fin,
+                kyc_level="STANDARD",
+                scopes=["superapp:user"],
+                issued_at=datetime.now(tz=timezone.utc),
+                expires_at=expires_at,
+            )
+        except Exception:
+            pass
+
         logger.info(
             "PIN verification successful",
-            extra={"user_id": user.user_id, "username": user.username},
+            extra={"username": user.username},
         )
 
-        return user
+        return user, token
 
-    def change_pin(self, user_id: str, current_pin: str, new_pin: str) -> None:
+
+    def change_pin(self, username: str, current_pin: str, new_pin: str) -> None:
         """
         Change a user's PIN.
 
         Args:
-            user_id:     The user's unique ID.
+            username:    The user's unique username.
             current_pin: The current 6-digit PIN.
             new_pin:     The new 6-digit PIN.
 
         Raises:
-            UserNotFoundError: If the user_id doesn't exist.
+            UserNotFoundError: If the username doesn't exist.
             InvalidPINError:   If the current PIN is wrong or new PIN format is invalid.
         """
-        user = self._user_repo.get_by_id(user_id)
+        user = self._user_repo.get_by_username(username)
         if user is None:
-            raise UserNotFoundError(f"User '{user_id}' not found.")
+            raise UserNotFoundError(f"User '{username}' not found.")
 
         if user.pin_hash is None or user.pin_hash != self._hash_pin(current_pin):
             raise InvalidPINError("Current PIN is incorrect.")
@@ -207,11 +222,11 @@ class UserRegistrationService:
         if not new_pin.isdigit() or len(new_pin) != 6:
             raise InvalidPINError("New PIN must be exactly 6 digits.")
 
-        self._user_repo.update_pin_hash(user_id, self._hash_pin(new_pin))
+        self._user_repo.update_pin_hash(username, self._hash_pin(new_pin))
 
         logger.info(
             "PIN changed",
-            extra={"user_id": user_id},
+            extra={"username": username},
         )
 
 

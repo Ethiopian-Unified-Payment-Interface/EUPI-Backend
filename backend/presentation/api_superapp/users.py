@@ -9,8 +9,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field
+
+from backend.domain.models.user import SuperAppUser
+from backend.presentation.api_superapp.auth_deps import get_current_superapp_user
 
 router = APIRouter(prefix="/superapp/users", tags=["Super App — User Management"])
 
@@ -22,7 +25,7 @@ class UserRegisterRequest(BaseModel):
 
     username: str = Field(
         ...,
-        description="Unique handle (3-30 chars, alphanumeric and underscores only).",
+        description="Base handle (3-30 chars, alphanumeric and underscores only). The system will append @eupi.",
         examples=["abebe_girma"],
         min_length=3,
         max_length=30,
@@ -56,8 +59,7 @@ class UserRegisterRequest(BaseModel):
 class SuperAppUserResponse(BaseModel):
     """Full registered Super App user profile."""
 
-    user_id: str = Field(..., description="Gateway-assigned unique user ID.", examples=["550e8400-e29b-41d4-a716-446655440000"])
-    username: str = Field(..., description="Unique handle.", examples=["abebe_girma"])
+    username: str = Field(..., description="Unique handle.", examples=["abebe_girma@eupi"])
     fin: str = Field(..., description="14-digit Fayda Identification Number.", examples=["12345678901234"])
     full_name: str = Field(..., description="Full legal name.", examples=["Abebe Girma Tadesse"])
     phone_number: str = Field(..., description="Registered phone number.", examples=["+251911234567"])
@@ -68,7 +70,7 @@ class SuperAppUserResponse(BaseModel):
 class PublicUserProfileResponse(BaseModel):
     """Public-facing profile for P2P recipient verification. No sensitive data."""
 
-    username: str = Field(..., description="Unique handle.", examples=["abebe_girma"])
+    username: str = Field(..., description="Unique handle.", examples=["abebe_girma@eupi"])
     full_name: str = Field(..., description="Full legal name.", examples=["Abebe Girma Tadesse"])
 
 
@@ -78,7 +80,7 @@ class PinLoginRequest(BaseModel):
     username: str = Field(
         ...,
         description="Username of the account to log into.",
-        examples=["abebe_girma"],
+        examples=["abebe_girma@eupi"],
     )
     pin: str = Field(
         ...,
@@ -92,19 +94,19 @@ class PinLoginRequest(BaseModel):
 class PinLoginResponse(BaseModel):
     """Successful PIN login response."""
 
-    user_id: str = Field(..., description="Authenticated user's ID.", examples=["550e8400-e29b-41d4-a716-446655440000"])
-    username: str = Field(..., description="Authenticated username.", examples=["abebe_girma"])
+    username: str = Field(..., description="Authenticated username.", examples=["abebe_girma@eupi"])
     full_name: str = Field(..., description="Full legal name.", examples=["Abebe Girma Tadesse"])
+    session_token: str = Field(..., description="JWT session token to include in Authorization header for subsequent calls.", examples=["eyJhbGciOiJIUzI1..."])
     message: str = Field(..., description="Login result.", examples=["PIN verified. Welcome back!"])
 
 
 class ChangePinRequest(BaseModel):
     """Payload to change the user's PIN."""
 
-    user_id: str = Field(
+    username: str = Field(
         ...,
-        description="Super App user ID.",
-        examples=["550e8400-e29b-41d4-a716-446655440000"],
+        description="Full Super App username (with @eupi suffix).",
+        examples=["abebe_girma@eupi"],
     )
     current_pin: str = Field(
         ...,
@@ -158,7 +160,6 @@ def register_user(body: UserRegisterRequest) -> SuperAppUserResponse:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
     return SuperAppUserResponse(
-        user_id=user.user_id,
         username=user.username,
         fin=user.fin,
         full_name=user.full_name,
@@ -172,11 +173,11 @@ def register_user(body: UserRegisterRequest) -> SuperAppUserResponse:
     "/login",
     response_model=PinLoginResponse,
     status_code=status.HTTP_200_OK,
-    summary="Login with PIN",
+    summary="Login with PIN & Start Session",
     description=(
         "**Authenticate a Super App user with their username and 6-digit PIN.**\n\n"
-        "Returns the authenticated user's identity on success. "
-        "Used each time the user opens the app."
+        "Returns the authenticated user's identity and a signed `session_token` on success. "
+        "Include this token in the `Authorization: Bearer <session_token>` header for all subsequent calls."
     ),
 )
 def login_with_pin(body: PinLoginRequest) -> PinLoginResponse:
@@ -184,16 +185,38 @@ def login_with_pin(body: PinLoginRequest) -> PinLoginResponse:
     service = get_user_registration_service()
 
     try:
-        user = service.verify_pin(username=body.username, pin=body.pin)
+        user, session_token = service.verify_pin(username=body.username, pin=body.pin)
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
 
     return PinLoginResponse(
-        user_id=user.user_id,
         username=user.username,
         full_name=user.full_name,
+        session_token=session_token,
         message="PIN verified. Welcome back!",
     )
+
+
+@router.post(
+    "/logout",
+    response_model=MessageResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Logout & Revoke Session",
+    description="Invalidates the active Super App session token.",
+)
+def logout_user(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    x_session_token: str | None = Header(default=None, alias="X-Session-Token"),
+    current_user: SuperAppUser = Depends(get_current_superapp_user),
+) -> MessageResponse:
+    from backend.main import get_repo
+    token = (authorization[7:].strip() if authorization and authorization.lower().startswith("bearer ") else x_session_token)
+    if token:
+        from backend.infrastructure.auth.jwt_handler import get_jti
+        jti = get_jti(token)
+        if jti:
+            get_repo().revoke_token(jti)
+    return MessageResponse(message="Logged out successfully. Session invalidated.")
 
 
 @router.put(
@@ -201,15 +224,21 @@ def login_with_pin(body: PinLoginRequest) -> PinLoginResponse:
     response_model=MessageResponse,
     status_code=status.HTTP_200_OK,
     summary="Change PIN",
-    description="**Change the user's 6-digit login PIN.** Requires the current PIN for verification.",
+    description="**Change the user's 6-digit login PIN.** Requires active session and current PIN.",
 )
-def change_pin(body: ChangePinRequest) -> MessageResponse:
+def change_pin(
+    body: ChangePinRequest,
+    current_user: SuperAppUser = Depends(get_current_superapp_user),
+) -> MessageResponse:
     from backend.main import get_user_registration_service
     service = get_user_registration_service()
 
+    if current_user.username != body.username:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot change PIN for another user.")
+
     try:
         service.change_pin(
-            user_id=body.user_id,
+            username=body.username,
             current_pin=body.current_pin,
             new_pin=body.new_pin,
         )

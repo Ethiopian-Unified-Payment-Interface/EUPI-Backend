@@ -107,8 +107,7 @@ class UserRecord(Base):
     """Persisted super app user."""
     __tablename__ = "users"
 
-    user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    username: Mapped[str] = mapped_column(String(30), nullable=False, unique=True, index=True)
+    username: Mapped[str] = mapped_column(String(64), primary_key=True)
     fin: Mapped[str] = mapped_column(String(14), nullable=False, unique=True, index=True)
     full_name: Mapped[str] = mapped_column(String(100), nullable=False)
     phone_number: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -122,7 +121,7 @@ class LinkedAccountRecord(Base):
     __tablename__ = "linked_accounts"
 
     link_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    user_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    username: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     bank_id: Mapped[str] = mapped_column(String(20), nullable=False)
     account_number: Mapped[str] = mapped_column(String(30), nullable=False)
     account_name: Mapped[str] = mapped_column(String(100), nullable=False)

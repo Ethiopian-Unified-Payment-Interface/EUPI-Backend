@@ -37,26 +37,6 @@ class UserRepositoryPort(ABC):
         """
         ...
     
-    @abstractmethod
-    def get_by_id(self, user_id: str) -> SuperAppUser | None:
-        """
-        Retrieve a user by their gateway-assigned unique user_id.
-
-        This is the primary lookup used to verify a user exists before
-        acting on their behalf (e.g., before linking a bank account),
-        since the authenticated caller is identified by user_id, not
-        username or FIN.
-
-        Args:
-            user_id: The gateway-assigned unique identifier of the user.
-
-        Returns:
-            A :class:`~domain.models.user.SuperAppUser` domain object if found, else None.
-
-        Raises:
-            DatabaseConnectionError: If the underlying storage is unavailable.
-        """
-        ...
 
     @abstractmethod
     def get_by_username(self, username: str) -> SuperAppUser | None:
@@ -107,11 +87,11 @@ class UserRepositoryPort(ABC):
         ...
 
     @abstractmethod
-    def update_pin_hash(self, user_id: str, pin_hash: str) -> None:
+    def update_pin_hash(self, username: str, pin_hash: str) -> None:
         """Update the stored PIN hash for a user.
         
         Args:
-            user_id: The user's unique identifier.
+            username: The user's unique identifier.
             pin_hash: The new SHA-256 hash of the PIN.
             
         Raises:

@@ -19,15 +19,10 @@ class SuperAppUser(BaseModel):
     customer completes Fayda eKYC verification and chooses a unique username.
     """
 
-    user_id: str = Field(
-        ...,
-        description="Gateway-assigned unique ID (UUID format).",
-        examples=["550e8400-e29b-41d4-a716-446655440000"],
-    )
     username: str = Field(
         ...,
-        description="Unique handle chosen by the user (3-30 chars, alphanumeric + underscores).",
-        examples=["abebe_girma"],
+        description="Unique platform handle with @eupi suffix. Acts as the primary key.",
+        examples=["abebe_girma@eupi"],
     )
     fin: str = Field(
         ...,
@@ -61,8 +56,7 @@ class SuperAppUser(BaseModel):
     model_config = {
         "json_schema_extra": {
             "example": {
-                "user_id": "550e8400-e29b-41d4-a716-446655440000",
-                "username": "abebe_girma",
+                "username": "abebe_girma@eupi",
                 "fin": "12345678901234",
                 "full_name": "Abebe Girma",
                 "phone_number": "+251911234567",

@@ -128,3 +128,60 @@ def get_fin(token: str) -> str | None:
 def get_jti(token: str) -> str | None:
     """Convenience: extract the `jti` (token ID) claim from a valid token."""
     return get_claim(token, "jti")
+
+
+def create_superapp_session_jwt(
+    username: str,
+    fin: str,
+) -> tuple[str, str, datetime]:
+    """
+    Issue a signed Super App session JWT for an authenticated user login.
+
+    Args:
+        username: Registered Super App handle (with @eupi).
+        fin:      Verified Fayda Identification Number.
+
+    Returns:
+        3-tuple of (encoded_token, jti, expires_at).
+    """
+    now = datetime.now(tz=timezone.utc)
+    expires_at = now + timedelta(seconds=settings.JWT_TOKEN_TTL_SECONDS)
+    jti = str(uuid.uuid4())
+
+    payload: dict[str, Any] = {
+        "sub": username,
+        "fin": fin,
+        "jti": jti,
+        "scopes": ["superapp:user"],
+        "kyc_level": "STANDARD",
+        "type": "superapp_session",
+        "iss": "kifiya-open-gateway",
+        "iat": int(now.timestamp()),
+        "exp": int(expires_at.timestamp()),
+    }
+
+    token: str = jwt.encode(
+        payload,
+        settings.JWT_SECRET_KEY,
+        algorithm=settings.JWT_ALGORITHM,
+    )
+    return token, jti, expires_at
+
+
+def decode_superapp_session_jwt(token: str) -> dict[str, Any]:
+    """
+    Decode and verify a Super App session JWT.
+
+    Args:
+        token: The session JWT string.
+
+    Returns:
+        Decoded payload dict containing 'sub' (username) and 'jti'.
+    """
+    return jwt.decode(
+        token,
+        settings.JWT_SECRET_KEY,
+        algorithms=[settings.JWT_ALGORITHM],
+        options={"require": ["sub", "jti", "type", "exp", "iat"]},
+    )
+

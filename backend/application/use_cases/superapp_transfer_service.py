@@ -58,7 +58,7 @@ class SuperAppTransferService:
 
     def initiate_transfer(
         self,
-        sender_user_id: str,
+        sender_username: str,
         recipient_username: str,
         amount: Decimal,
         currency: str = "ETB",
@@ -71,7 +71,7 @@ class SuperAppTransferService:
         for both parties, and delegates to PISService.initiate_payment().
 
         Args:
-            sender_user_id:     The sender's user_id (from JWT/session).
+            sender_username:    The sender's username (from JWT/session).
             recipient_username: The recipient's username handle.
             amount:             Transfer amount (must be > 0).
             currency:           Currency code (default "ETB").
@@ -93,22 +93,37 @@ class SuperAppTransferService:
             )
 
         # Prevent self-transfer
-        if recipient.user_id == sender_user_id:
+        if recipient.username == sender_username:
             raise SelfTransferError("Cannot send money to yourself.")
 
         # Find sender's default sending account
-        sender_account = self._find_default_sending(sender_user_id)
+        sender_account = self._find_default_sending(sender_username)
         if sender_account is None:
             raise NoDefaultAccountError(
                 "You have no default sending account. Please link a bank account first."
             )
 
         # Find recipient's default receiving account
-        recipient_account = self._find_default_receiving(recipient.user_id)
+        recipient_account = self._find_default_receiving(recipient.username)
         if recipient_account is None:
             raise NoDefaultAccountError(
                 f"Recipient '{recipient_username}' has no default receiving account."
             )
+
+        # Check sender's available balance at their default sending bank
+        port = self._pis_service._bank_ports.get(sender_account.bank_id)
+        if port is not None:
+            try:
+                acct = port.get_balance(sender_account.account_number)
+                if acct.available_balance < amount:
+                    raise InsufficientBalanceError(
+                        f"Insufficient funds in default sending account '{sender_account.account_number}' "
+                        f"at {sender_account.bank_id.value}. Available: {acct.available_balance} ETB, Requested: {amount} ETB."
+                    )
+            except InsufficientBalanceError:
+                raise
+            except Exception as exc:
+                logger.warning(f"Could not verify balance prior to transfer: {exc}")
 
         # Build the PIS request
         request = PaymentInitiateRequest(
@@ -122,7 +137,7 @@ class SuperAppTransferService:
             # A UUID suffix keeps this unique per attempt — the DB enforces
             # end_to_end_id uniqueness, so two identical repeat transfers
             # (same sender, recipient, amount) must not collide.
-            end_to_end_id=f"P2P-{uuid.uuid4().hex[:12].upper()}-{sender_user_id[:8]}-{recipient.user_id[:8]}",
+            end_to_end_id=f"P2P-{uuid.uuid4().hex[:12].upper()}-{sender_username}-{recipient.username}",
             remittance_info=remittance_info,
         )
 
@@ -131,7 +146,7 @@ class SuperAppTransferService:
         logger.info(
             "P2P transfer initiated",
             extra={
-                "sender_user_id": sender_user_id,
+                "sender_username": sender_username,
                 "recipient_username": recipient_username,
                 "amount": str(amount),
                 "payment_id": payment.payment_id,
@@ -142,17 +157,17 @@ class SuperAppTransferService:
 
     # Private helpers
 
-    def _find_default_sending(self, user_id: str) -> LinkedAccount | None:
+    def _find_default_sending(self, username: str) -> LinkedAccount | None:
         """Find the user's default sending account, or None."""
-        links = self._link_repo.list_for_user(user_id)
+        links = self._link_repo.list_for_user(username)
         for link in links:
             if link.is_default_sending:
                 return link
         return None
 
-    def _find_default_receiving(self, user_id: str) -> LinkedAccount | None:
+    def _find_default_receiving(self, username: str) -> LinkedAccount | None:
         """Find the user's default receiving account, or None."""
-        links = self._link_repo.list_for_user(user_id)
+        links = self._link_repo.list_for_user(username)
         for link in links:
             if link.is_default_receiving:
                 return link
@@ -171,3 +186,6 @@ class NoDefaultAccountError(TransferError):
 
 class SelfTransferError(TransferError):
     """Raised when a user attempts to transfer to themselves."""
+
+class InsufficientBalanceError(TransferError):
+    """Raised when the sender has insufficient funds in their default sending account."""

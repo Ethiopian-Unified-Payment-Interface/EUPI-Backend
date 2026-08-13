@@ -55,7 +55,7 @@ class SQLiteAccountLinkRepository(AccountLinkRepositoryPort):
     def add_link(self, link: LinkedAccount) -> None:
         record = LinkedAccountRecord(
             link_id=link.link_id,
-            user_id=link.user_id,
+            username=link.username,
             bank_id=link.bank_id.value,
             account_number=link.account_number,
             account_name=link.account_name,
@@ -66,10 +66,10 @@ class SQLiteAccountLinkRepository(AccountLinkRepositoryPort):
         with self._session() as session:
             session.add(record)
 
-    def list_for_user(self, user_id: str) -> list[LinkedAccount]:
+    def list_for_user(self, username: str) -> list[LinkedAccount]:
         with self._session() as session:
             records = session.query(LinkedAccountRecord).filter(
-                LinkedAccountRecord.user_id == user_id
+                LinkedAccountRecord.username == username
             ).all()
             return [self._to_domain(r) for r in records]
 
@@ -87,13 +87,13 @@ class SQLiteAccountLinkRepository(AccountLinkRepositoryPort):
             # Unset previous default for this user+direction
             if direction == AccountDirection.SENDING:
                 session.query(LinkedAccountRecord).filter(
-                    LinkedAccountRecord.user_id == record.user_id,
+                    LinkedAccountRecord.username == record.username,
                     LinkedAccountRecord.is_default_sending == True,  # noqa: E712
                 ).update({"is_default_sending": False})
                 record.is_default_sending = True
             else:
                 session.query(LinkedAccountRecord).filter(
-                    LinkedAccountRecord.user_id == record.user_id,
+                    LinkedAccountRecord.username == record.username,
                     LinkedAccountRecord.is_default_receiving == True,  # noqa: E712
                 ).update({"is_default_receiving": False})
                 record.is_default_receiving = True
@@ -110,7 +110,7 @@ class SQLiteAccountLinkRepository(AccountLinkRepositoryPort):
     def _to_domain(record: LinkedAccountRecord) -> LinkedAccount:
         return LinkedAccount(
             link_id=record.link_id,
-            user_id=record.user_id,
+            username=record.username,
             bank_id=BankID(record.bank_id),
             account_number=record.account_number,
             account_name=record.account_name,
