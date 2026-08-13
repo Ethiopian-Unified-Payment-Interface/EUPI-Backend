@@ -74,6 +74,13 @@ class UserRegistrationService:
                 f"FIN '{fin}' is not registered in the Fayda National Identity System."
             )
 
+        # Check FIN uniqueness (one account per national ID)
+        existing = self._user_repo.get_by_fin(fin)
+        if existing is not None:
+            raise FINAlreadyRegisteredError(
+                "A super app account already exists for this FIN."
+            )
+
         # Verify entered phone number matches the phone number registered to that FIN in Fayda
         fayda_phone_norm = identity["phone_number"].strip().replace(" ", "")
         input_phone_norm = phone_number.strip().replace(" ", "")

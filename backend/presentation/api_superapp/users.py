@@ -377,7 +377,8 @@ def change_pin(
     from backend.main import get_user_registration_service
     service = get_user_registration_service()
 
-    if current_user.username != body.username:
+    from backend.domain.models.user import normalize_username
+    if normalize_username(current_user.username) != normalize_username(body.username):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot change PIN for another user.")
 
     try:
