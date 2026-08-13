@@ -12,6 +12,11 @@
 1. [Overview & Mock Architecture](#1-overview--mock-architecture)
 2. [Fayda National ID Mock Registry & OTP Credentials](#2-fayda-national-id-mock-registry--otp-credentials)
 3. [Mock Core Banking System (CBS) Adapters](#3-mock-core-banking-system-cbs-adapters)
+   - 3.1. [Integrated Mock Banks & Configuration Settings](#31-integrated-mock-banks--configuration-settings)
+   - 3.2. [Proprietary API Formats & Structural Differences](#32-proprietary-api-formats--structural-differences)
+   - 3.3. [Domain Model Normalization (Ports & Adapters)](#33-how-we-normalize-banks-using-hexagonal-ports--adapters)
+   - 3.4. [Production Migration: Swapping Mocks for Live CBS Systems](#34-production-migration-how-to-swap-mock-adapters-for-real-cbs-systems)
+   - 3.5. [User → Designated Bank Accounts Mapping Matrix](#35-user--designated-bank-accounts-mapping-matrix)
 4. [Super App User Handles & PIN Sessions](#4-super-app-user-handles--pin-sessions)
 5. [Smart Router & Bank Rail Statuses](#5-smart-router--bank-rail-statuses)
 6. [Step-by-Step Frontend Testing Flows](#6-step-by-step-frontend-testing-flows)
@@ -60,17 +65,157 @@ Use these 14-digit Fayda Identification Numbers (FINs) when testing registration
 
 ## 3. Mock Core Banking System (CBS) Adapters
 
-The gateway integrates with 6 primary commercial bank adapters:
-- **COOP** — Cooperative Bank of Oromia
-- **CBE** — Commercial Bank of Ethiopia
-- **WEGAGEN** — Wegagen Bank
-- **AWASH** — Awash Bank
-- **ABYSSINIA** — Bank of Abyssinia (Abisiniya)
-- **BERHAN** — Berhan Bank
+The **EUPI Gateway** integrates 6 primary Ethiopian commercial bank adapters operating in Layer 3 (Infrastructure).
 
 ---
 
-### User → Designated Bank Accounts Mapping Matrix
+### 3.1. Integrated Mock Banks & Configuration Settings
+
+Each bank adapter is configured via runtime settings (`backend/config.py`) sourced from environment variables:
+
+| Bank Code (`BankID`) | Full Institution Name | Config Variable (`backend/config.py`) | Default API Key / Token Header | Source File |
+| :--- | :--- | :--- | :--- | :--- |
+| **`COOP`** | Cooperative Bank of Oromia | `COOP_CBS_API_KEY` | `X-COOP-API-Key: mock-coop-key` | [`coop_cbs.py`](file:///home/grace/Dev/kifiya/hackathon/kifiya-open-gateway/backend/infrastructure/adapters/banks/coop_cbs.py) |
+| **`CBE`** | Commercial Bank of Ethiopia | `CBE_CBS_API_KEY` | `X-CBE-Auth-Token: mock-cbe-key` | [`cbe_cbs.py`](file:///home/grace/Dev/kifiya/hackathon/kifiya-open-gateway/backend/infrastructure/adapters/banks/cbe_cbs.py) |
+| **`WEGAGEN`** | Wegagen Bank | `WEGAGEN_CBS_API_KEY` | `Authorization: Bearer mock-wegagen-key` | [`wegagen_cbs.py`](file:///home/grace/Dev/kifiya/hackathon/kifiya-open-gateway/backend/infrastructure/adapters/banks/wegagen_cbs.py) |
+| **`AWASH`** | Awash Bank | `AWASH_CBS_API_KEY` | `X-Awash-Key: mock-awash-key` | [`awash_cbs.py`](file:///home/grace/Dev/kifiya/hackathon/kifiya-open-gateway/backend/infrastructure/adapters/banks/awash_cbs.py) |
+| **`ABYSSINIA`** | Bank of Abyssinia (Abisiniya) | `ABYSSINIA_CBS_API_KEY` | `X-Abyssinia-Token: mock-abyssinia-key` | [`abyssinia_cbs.py`](file:///home/grace/Dev/kifiya/hackathon/kifiya-open-gateway/backend/infrastructure/adapters/banks/abyssinia_cbs.py) |
+| **`BERHAN`** | Berhan Bank | `BERHAN_CBS_API_KEY` | `X-Berhan-Auth: mock-berhan-key` | [`berhan_cbs.py`](file:///home/grace/Dev/kifiya/hackathon/kifiya-open-gateway/backend/infrastructure/adapters/banks/berhan_cbs.py) |
+
+---
+
+### 3.2. Proprietary API Formats & Structural Differences
+
+Because Ethiopian commercial banks run distinct Core Banking Systems (Flexcube, Temenos T24, Finacle), each bank's native API exposes different JSON schemas, authentication headers, error codes, and field naming conventions:
+
+```
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                             PROPRIETARY CBS FORMATS                              │
+├───────────────┬──────────────────────────────────┬───────────────────────────────┤
+│ Bank Adapter  │ Native Payload Keys              │ Header / Auth Protocol        │
+├───────────────┼──────────────────────────────────┼───────────────────────────────┤
+│ COOP          │ account_no, available_bal,       │ Header: X-COOP-API-Key        │
+│               │ hold_amount, cust_name           │                               │
+├───────────────┼──────────────────────────────────┼───────────────────────────────┤
+│ CBE           │ accountIdentifier, balances[],   │ Header: X-CBE-Auth-Token      │
+│               │ balanceType: "BOOK", "AVAIL"     │ ISO-20022 Aligned             │
+├───────────────┼──────────────────────────────────┼───────────────────────────────┤
+│ WEGAGEN       │ accountDetails: { accNo,         │ Header: Authorization Bearer  │
+│               │ availBal, legBal, cc, title }    │ SOAP-wrapped REST JSON        │
+├───────────────┼──────────────────────────────────┼───────────────────────────────┤
+│ AWASH         │ account_info: { acc_num,         │ Header: X-Awash-Key           │
+│               │ bal_avail, bal_ledger, curr }    │ Custom JSON                   │
+├───────────────┼──────────────────────────────────┼───────────────────────────────┤
+│ ABYSSINIA     │ data: { accountId, ownerName,    │ Header: X-Abyssinia-Token     │
+│               │ balance: { available, ledger } } │ Modern REST Schema            │
+├───────────────┼──────────────────────────────────┼───────────────────────────────┤
+│ BERHAN        │ payload: { account_id,           │ Header: X-Berhan-Auth         │
+│               │ net_balance, gross_balance }     │ JSON-RPC Style                │
+└───────────────┴──────────────────────────────────┴───────────────────────────────┘
+```
+
+---
+
+### 3.3. How We Normalize Banks Using Hexagonal Ports & Adapters
+
+To prevent upstream application services (PIS, AIS, Account Linking, Smart Router) from becoming coupled to any single bank's proprietary format, the gateway enforces **Clean Architecture / Hexagonal Architecture (Ports & Adapters)**:
+
+1. **Domain Model Normalization (Layer 1)**:
+   [`AccountBalance`](file:///home/grace/Dev/kifiya/hackathon/kifiya-open-gateway/backend/domain/models/account.py#L39-L70) defines the single, standardized enterprise representation:
+   ```python
+   class AccountBalance(BaseModel):
+       account_number: str
+       available_balance: Decimal
+       ledger_balance: Decimal
+       currency: str = "ETB"
+       account_name: str
+       status: AccountStatus = AccountStatus.ACTIVE
+   ```
+
+2. **Abstract Driven Port Interface (Layer 2)**:
+   [`BankPort`](file:///home/grace/Dev/kifiya/hackathon/kifiya-open-gateway/backend/application/ports/bank_port.py#L22-L60) defines the strict abstract contract:
+   ```python
+   class BankPort(ABC):
+       @abstractmethod
+       def get_balance(self, account_number: str) -> AccountBalance: ...
+       @abstractmethod
+       def initiate_transfer(self, request: PaymentInitiateRequest) -> PaymentResult: ...
+       @abstractmethod
+       def health_check(self) -> bool: ...
+   ```
+
+3. **Concrete Infrastructure Adapters (Layer 3)**:
+   Each bank adapter implements `BankPort`. Inside `get_balance()`, the adapter converts the bank's proprietary JSON into the unified `AccountBalance` domain object:
+   - **COOP Adapter**: Maps `available_bal` $\rightarrow$ `available_balance`, `cust_name` $\rightarrow$ `account_name`.
+   - **CBE Adapter**: Extracts `balanceType == "AVAIL"` $\rightarrow$ `available_balance`, `accountHolder` $\rightarrow$ `account_name`.
+   - **Wegagen Adapter**: Maps `accountDetails.availBal` $\rightarrow$ `available_balance`, `title` $\rightarrow$ `account_name`.
+   - **Awash Adapter**: Maps `account_info.bal_avail` $\rightarrow$ `available_balance`, `holder_name` $\rightarrow$ `account_name`.
+   - **Abyssinia Adapter**: Maps `data.balance.available` $\rightarrow$ `available_balance`, `ownerName` $\rightarrow$ `account_name`.
+   - **Berhan Adapter**: Maps `payload.net_balance` $\rightarrow$ `available_balance`, `owner_fullname` $\rightarrow$ `account_name`.
+
+---
+
+### 3.4. Production Migration: How to Swap Mock Adapters for Real CBS Systems
+
+Because application services and route handlers interact **exclusively via the `BankPort` interface**, zero code changes are required in domain models or use cases when deploying live production bank integrations.
+
+#### Step-by-Step Production Swap:
+
+1. **Create the Production Adapter Class**:
+   Create a new file (e.g., `backend/infrastructure/adapters/banks/live_coop_cbs.py`):
+   ```python
+   import httpx
+   from backend.application.ports.bank_port import BankPort
+   from backend.domain.models.account import AccountBalance, AccountStatus
+
+   class LiveCoopCBSAdapter(BankPort):
+       def __init__(self, base_url: str, api_key: str, cert_path: str) -> None:
+           self._client = httpx.Client(
+               base_url=base_url,
+               headers={"X-COOP-API-Key": api_key},
+               verify=cert_path,  # Mutual TLS (mTLS) certificate
+           )
+
+       def get_balance(self, account_number: str) -> AccountBalance:
+           resp = self._client.get(f"/cbs/v1/accounts/{account_number}/balance")
+           resp.raise_for_status()
+           data = resp.json()
+           return AccountBalance(
+               account_number=data["account_no"],
+               available_balance=Decimal(str(data["available_bal"])),
+               ledger_balance=Decimal(str(data["available_bal"] + data.get("hold_amount", 0))),
+               currency=data.get("currency_code", "ETB"),
+               account_name=data["cust_name"],
+               status=AccountStatus.ACTIVE,
+           )
+   ```
+
+2. **Update Dependency Injection Container in `main.py`**:
+   In `backend/main.py` (inside the `lifespan` startup hook), toggle adapter instantiation based on environment configuration (`settings.DEBUG`):
+
+   ```python
+   # backend/main.py
+   if settings.DEBUG:
+       # Development mode: use mock deterministic adapters
+       coop_adapter = CoopCBSAdapter(api_key=settings.COOP_CBS_API_KEY)
+   else:
+       # Production mode: instantiate live HTTPX adapters with mTLS certs
+       coop_adapter = LiveCoopCBSAdapter(
+           base_url=settings.COOP_PROD_URL,
+           api_key=settings.COOP_CBS_API_KEY,
+           cert_path="/etc/ssl/certs/coop_mtls.pem",
+       )
+
+   # Register adapter into DI container mapping
+   bank_adapters[BankID.COOP] = coop_adapter
+   ```
+
+3. **Verification**:
+   Run `pytest` or `e2e_test.py`. Because the application layer consumes `BankPort`, the entire P2P transfer, AIS balance aggregation, and Smart Router pipeline operate seamlessly with zero changes!
+
+---
+
+### 3.5. User → Designated Bank Accounts Mapping Matrix
 
 This table shows **all test users and their designated bank accounts across multiple banks**. Use these account numbers when linking bank accounts (`POST /superapp/accounts/link`) for a registered user.
 
