@@ -253,7 +253,6 @@ app = FastAPI(
         "- **Active Bank Rails**: `COOP`, `CBE`, `WEGAGEN`\n"
     ),
     version="1.0.0",
-    contact={"name": "EUPI Engineering Team", "url": "https://kifiya.com"},
     license_info={"name": "Proprietary"},
     openapi_tags=tags_metadata,
     docs_url="/docs",
