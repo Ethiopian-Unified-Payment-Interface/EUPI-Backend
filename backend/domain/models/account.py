@@ -32,6 +32,8 @@ class BankID(str, Enum):
     CBE = "CBE"           # Commercial Bank of Ethiopia
     WEGAGEN = "WEGAGEN"   # Wegagen Bank
     AWASH = "AWASH"       # Awash Bank
+    ABYSSINIA = "ABYSSINIA"  # Bank of Abyssinia (Abisiniya)
+    BERHAN = "BERHAN"     # Berhan Bank
 
 
 class AccountType(str, Enum):

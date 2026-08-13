@@ -32,6 +32,9 @@ from backend.config import settings  # noqa: E402 — must follow load_dotenv()
 from backend.infrastructure.adapters.banks.coop_cbs import CoopCBSAdapter
 from backend.infrastructure.adapters.banks.cbe_cbs import CBECBSAdapter
 from backend.infrastructure.adapters.banks.wegagen_cbs import WegagenCBSAdapter
+from backend.infrastructure.adapters.banks.awash_cbs import AwashCBSAdapter
+from backend.infrastructure.adapters.banks.abyssinia_cbs import AbyssiniaCBSAdapter
+from backend.infrastructure.adapters.banks.berhan_cbs import BerhanCBSAdapter
 from backend.infrastructure.adapters.identity.fayda import FaydaAdapter
 from backend.infrastructure.adapters.router.smart_router import SmartRouter
 from backend.infrastructure.database.sqlite_repo import SQLiteRepository
@@ -123,9 +126,12 @@ async def lifespan(app: FastAPI):
 
     # 2. Concrete bank adapters
     bank_ports = {
-        BankID.COOP:    CoopCBSAdapter(),
-        BankID.CBE:     CBECBSAdapter(),
-        BankID.WEGAGEN: WegagenCBSAdapter(),
+        BankID.COOP:      CoopCBSAdapter(),
+        BankID.CBE:       CBECBSAdapter(),
+        BankID.WEGAGEN:   WegagenCBSAdapter(),
+        BankID.AWASH:     AwashCBSAdapter(),
+        BankID.ABYSSINIA: AbyssiniaCBSAdapter(),
+        BankID.BERHAN:    BerhanCBSAdapter(),
     }
 
     # 3. Identity adapter (depends on repo for token revocation)
@@ -290,7 +296,7 @@ def root():
         "version": "1.0.0",
         "status": "operational",
         "architecture": "Clean + Hexagonal (Ports & Adapters)",
-        "registered_rails": ["COOP", "CBE", "WEGAGEN"],
+        "registered_rails": [bank.value for bank in BankID],
         "database": settings.DATABASE_URL,
         "docs": "/docs",
         "redoc": "/redoc",

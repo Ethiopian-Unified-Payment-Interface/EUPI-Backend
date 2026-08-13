@@ -36,6 +36,8 @@ class Settings:
     CBE_CBS_API_KEY: str = os.getenv("CBE_CBS_API_KEY", "mock-cbe-key")
     WEGAGEN_CBS_API_KEY: str = os.getenv("WEGAGEN_CBS_API_KEY", "mock-wegagen-key")
     AWASH_CBS_API_KEY: str = os.getenv("AWASH_CBS_API_KEY", "mock-awash-key")
+    ABYSSINIA_CBS_API_KEY: str = os.getenv("ABYSSINIA_CBS_API_KEY", "mock-abyssinia-key")
+    BERHAN_CBS_API_KEY: str = os.getenv("BERHAN_CBS_API_KEY", "mock-berhan-key")
 
     # ── Fayda Identity API ────────────────────────────────────────────────────
     FAYDA_API_BASE_URL: str = os.getenv(

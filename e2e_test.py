@@ -65,7 +65,7 @@ print("\n── 1. Health Check ──")
 r = req("GET", "/")
 check("Server operational", r.get("status") == "operational", str(r))
 check("Version 1.0.0", r.get("version") == "1.0.0", str(r))
-check("3 bank rails registered", len(r.get("registered_rails", [])) == 3, str(r))
+check("6 bank rails registered", len(r.get("registered_rails", [])) == 6, str(r))
 
 # ── 2. Fayda Auth — Sender (Abebe Girma, FIN 12345678901234) ──
 print("\n── 2. Fayda Auth — Sender (Abebe Girma) ──")
@@ -223,8 +223,8 @@ if isinstance(r, list) and len(r) > 0:
     check("Available balance present", "available_balance" in r[0], str(r[0]))
     check("Currency is ETB", r[0].get("currency") == "ETB", str(r[0]))
 
-# ── 10. Link Second Account + Change Default ──
-print("\n── 10. Link Second Account + Change Default ──")
+# ── 10. Link Additional Bank Accounts (Awash, Abyssinia, Berhan) ──
+print("\n── 10. Link Additional Bank Accounts & Change Default ──")
 r = req("POST", "/v1/superapp/accounts/link", body={
     "username": sender_username,
     "bank_id": "CBE",
@@ -232,6 +232,27 @@ r = req("POST", "/v1/superapp/accounts/link", body={
 }, token=sender_session_token)
 check("Sender CBE account linked", "link_id" in r, str(r))
 sender_link2_id = r.get("link_id", "")
+
+r = req("POST", "/v1/superapp/accounts/link", body={
+    "username": sender_username,
+    "bank_id": "AWASH",
+    "account_number": "1000333444555"  # Belongs to Abebe Girma Tadesse
+}, token=sender_session_token)
+check("Sender Awash Bank account linked", "link_id" in r, str(r))
+
+r = req("POST", "/v1/superapp/accounts/link", body={
+    "username": sender_username,
+    "bank_id": "ABYSSINIA",
+    "account_number": "1000666777888"  # Belongs to Abebe Girma Tadesse
+}, token=sender_session_token)
+check("Sender Bank of Abyssinia account linked", "link_id" in r, str(r))
+
+r = req("POST", "/v1/superapp/accounts/link", body={
+    "username": sender_username,
+    "bank_id": "BERHAN",
+    "account_number": "1000111999888"  # Belongs to Abebe Girma Tadesse
+}, token=sender_session_token)
+check("Sender Berhan Bank account linked", "link_id" in r, str(r))
 
 r = req("PUT", f"/v1/superapp/accounts/{sender_link2_id}/default", body={
     "username": sender_username,

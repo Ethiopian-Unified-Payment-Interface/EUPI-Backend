@@ -60,22 +60,71 @@ Use these 14-digit Fayda Identification Numbers (FINs) when testing registration
 
 ## 3. Mock Core Banking System (CBS) Adapters
 
-The gateway integrates with 3 primary commercial bank adapters:
+The gateway integrates with 6 primary commercial bank adapters:
 - **COOP** — Cooperative Bank of Oromia
 - **CBE** — Commercial Bank of Ethiopia
 - **WEGAGEN** — Wegagen Bank
+- **AWASH** — Awash Bank
+- **ABYSSINIA** — Bank of Abyssinia (Abisiniya)
+- **BERHAN** — Berhan Bank
 
-### Designated Bank Accounts Matrix
+---
 
-These account numbers return designated account holder names matching specific test citizens. Use them to test **Account Linking** (`POST /superapp/accounts/link`) and **Fayda Ownership Verification**.
+### User → Designated Bank Accounts Mapping Matrix
+
+This table shows **all test users and their designated bank accounts across multiple banks**. Use these account numbers when linking bank accounts (`POST /superapp/accounts/link`) for a registered user.
+
+| Citizen Legal Name | Fayda FIN | Phone Number | Bank Code (`bank_id`) | Designated Account Number |
+| :--- | :--- | :--- | :--- | :--- |
+| **Abebe Girma Tadesse** | `12345678901234` | `+251911234567` | **`COOP`** | `1000234567890` |
+| | | | **`CBE`** | `1000111222333` |
+| | | | **`AWASH`** | `1000333444555` |
+| | | | **`ABYSSINIA`** | `1000666777888` |
+| | | | **`WEGAGEN`** | `1000555666777` |
+| | | | **`BERHAN`** | `1000111999888` |
+| **Selamawit Bekele Hailu** | `23456789012345` | `+251922345678` | **`CBE`** | `1000987654321` |
+| | | | **`AWASH`** | `1000444555666` |
+| | | | **`ABYSSINIA`** | `1000777888999` |
+| | | | **`WEGAGEN`** | `1000888999000` |
+| | | | **`BERHAN`** | `1000222888777` |
+| **Daniel Kebede Woldetsadik** | `21872187218777` | `+251904267039` | **`COOP`** | `1000101010101` |
+| | | | **`CBE`** | `1000202020202` |
+| | | | **`ABYSSINIA`** | `1000303030303` |
+| **Tewodros Kassahun** | `34567890123456` | `+251933456789` | **`AWASH`** | `1000404040404` |
+| | | | **`CBE`** | `1000505050505` |
+| | | | **`BERHAN`** | `1000606060606` |
+| **Betelhem Desalegn** | `45678901234567` | `+251944567890` | **`WEGAGEN`** | `1000707070707` |
+| | | | **`ABYSSINIA`** | `1000808080808` |
+| **Yared Ashenafi** | `56789012345678` | `+251955678901` | **`COOP`** | `1000909090909` |
+| | | | **`AWASH`** | `1000121212121` |
+
+---
+
+### Bank → Accounts View
 
 | Bank Code (`bank_id`) | Account Number | Account Holder Name | Matches Citizen FIN |
 | :--- | :--- | :--- | :--- |
-| **`COOP`** | `1000234567890` | ABEBE GIRMA TADESSE | `12345678901234` (Abebe) |
-| **`CBE`** | `1000111222333` | ABEBE GIRMA TADESSE | `12345678901234` (Abebe) |
-| **`CBE`** | `1000987654321` | SELAMAWIT BEKELE HAILU | `23456789012345` (Selamawit) |
-| **`WEGAGEN`** | `1000555666777` | ABEBE GIRMA TADESSE | `12345678901234` (Abebe) |
-| **`WEGAGEN`** | `1000888999000` | SELAMAWIT BEKELE HAILU | `23456789012345` (Selamawit) |
+| **`COOP`** | `1000234567890` | ABEBE GIRMA TADESSE | `12345678901234` |
+| **`COOP`** | `1000101010101` | DANIEL KEBEDE WOLDETSADIK | `21872187218777` |
+| **`COOP`** | `1000909090909` | YARED ASHENAFI | `56789012345678` |
+| **`CBE`** | `1000111222333` | ABEBE GIRMA TADESSE | `12345678901234` |
+| **`CBE`** | `1000987654321` | SELAMAWIT BEKELE HAILU | `23456789012345` |
+| **`CBE`** | `1000202020202` | DANIEL KEBEDE WOLDETSADIK | `21872187218777` |
+| **`CBE`** | `1000505050505` | TEWODROS KASSAHUN | `34567890123456` |
+| **`AWASH`** | `1000333444555` | ABEBE GIRMA TADESSE | `12345678901234` |
+| **`AWASH`** | `1000444555666` | SELAMAWIT BEKELE HAILU | `23456789012345` |
+| **`AWASH`** | `1000404040404` | TEWODROS KASSAHUN | `34567890123456` |
+| **`AWASH`** | `1000121212121` | YARED ASHENAFI | `56789012345678` |
+| **`ABYSSINIA`** | `1000666777888` | ABEBE GIRMA TADESSE | `12345678901234` |
+| **`ABYSSINIA`** | `1000777888999` | SELAMAWIT BEKELE HAILU | `23456789012345` |
+| **`ABYSSINIA`** | `1000303030303` | DANIEL KEBEDE WOLDETSADIK | `21872187218777` |
+| **`ABYSSINIA`** | `1000808080808` | BETELHEM DESALEGN | `45678901234567` |
+| **`WEGAGEN`** | `1000555666777` | ABEBE GIRMA TADESSE | `12345678901234` |
+| **`WEGAGEN`** | `1000888999000` | SELAMAWIT BEKELE HAILU | `23456789012345` |
+| **`WEGAGEN`** | `1000707070707` | BETELHEM DESALEGN | `45678901234567` |
+| **`BERHAN`** | `1000111999888` | ABEBE GIRMA TADESSE | `12345678901234` |
+| **`BERHAN`** | `1000222888777` | SELAMAWIT BEKELE HAILU | `23456789012345` |
+| **`BERHAN`** | `1000606060606` | TEWODROS KASSAHUN | `34567890123456` |
 
 ### Dynamic Account Resolution
 For testing other accounts, any valid account number string will resolve cleanly with:

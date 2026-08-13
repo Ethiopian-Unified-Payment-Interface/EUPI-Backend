@@ -146,12 +146,30 @@ class CoopCBSAdapter(BankPort):
         available = Decimal(str(round(rng.uniform(8_000, 120_000), 2)))
         ledger = available + Decimal(str(round(rng.uniform(100, 5_000), 2)))
 
-        if account_number == "1000987654321":
-            acct_name = "SELAMAWIT BEKELE HAILU"
-        elif account_number in ("1000234567890", "1000111222333"):
-            acct_name = "ABEBE GIRMA TADESSE"
-        else:
-            acct_name = "ABEBE GIRMA TADESSE"
+        _ACCOUNT_MAP = {
+            "1000234567890": "ABEBE GIRMA TADESSE",
+            "1000111222333": "ABEBE GIRMA TADESSE",
+            "1000333444555": "ABEBE GIRMA TADESSE",
+            "1000666777888": "ABEBE GIRMA TADESSE",
+            "1000555666777": "ABEBE GIRMA TADESSE",
+            "1000111999888": "ABEBE GIRMA TADESSE",
+            "1000987654321": "SELAMAWIT BEKELE HAILU",
+            "1000444555666": "SELAMAWIT BEKELE HAILU",
+            "1000777888999": "SELAMAWIT BEKELE HAILU",
+            "1000888999000": "SELAMAWIT BEKELE HAILU",
+            "1000222888777": "SELAMAWIT BEKELE HAILU",
+            "1000101010101": "DANIEL KEBEDE WOLDETSADIK",
+            "1000202020202": "DANIEL KEBEDE WOLDETSADIK",
+            "1000303030303": "DANIEL KEBEDE WOLDETSADIK",
+            "1000404040404": "TEWODROS KASSAHUN",
+            "1000505050505": "TEWODROS KASSAHUN",
+            "1000606060606": "TEWODROS KASSAHUN",
+            "1000707070707": "BETELHEM DESALEGN",
+            "1000808080808": "BETELHEM DESALEGN",
+            "1000909090909": "YARED ASHENAFI",
+            "1000121212121": "YARED ASHENAFI",
+        }
+        acct_name = _ACCOUNT_MAP.get(account_number, "ABEBE GIRMA TADESSE")
 
         # Coop's raw API format (proprietary field names)
         return {
