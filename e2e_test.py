@@ -520,6 +520,81 @@ check("Logout successful", "Logged out" in r.get("message", ""), str(r))
 r = req("GET", "/v1/superapp/accounts/sync", token=sender_session_token)
 check("Revoked session token rejected (401)", isinstance(r, dict) and r.get("_status") == 401, str(r))
 
+# ── 15. Admin Web Portal Integration Tests ──
+print("\n── 15. Admin Web Portal Integration Tests ──")
+admin_token = "dev-admin-token"
+
+# Dashboard Stats & Activity
+r = req("GET", "/v1/admin/dashboard/stats", token=admin_token)
+check("Admin Dashboard stats returned", "total_users" in r, str(r))
+
+r = req("GET", "/v1/admin/dashboard/activity", token=admin_token)
+check("Admin Activity feed returned items", "items" in r, str(r))
+
+# Bank Management
+r = req("GET", "/v1/admin/banks", token=admin_token)
+check("Admin List banks returned 6 rails", "banks" in r and len(r.get("banks", [])) == 6, str(r))
+
+r = req("GET", "/v1/admin/banks/CBE", token=admin_token)
+check("Admin Get bank rail returned CBE details", r.get("name") == "Commercial Bank of Ethiopia", str(r))
+
+r = req("PUT", "/v1/admin/banks/AWASH", body={
+    "name": "Awash Bank PLC",
+    "description": "Updated commercial bank rail adapter",
+    "status": "ACTIVE",
+    "base_url": "https://api.awashbank.com/v1",
+    "api_key_header_name": "X-Awash-Key",
+    "timeout_ms": 3500,
+    "cost_weight": 0.25,
+    "circuit_breaker_threshold": 0.50
+}, token=admin_token)
+check("Admin Update bank rail configuration succeeded", r.get("success") is True, str(r))
+
+# Customers & Transactions
+r = req("GET", "/v1/admin/users/customers", token=admin_token)
+check("Admin Customers list returned", "customers" in r, str(r))
+
+r = req("GET", "/v1/admin/users/customers/stats", token=admin_token)
+check("Admin Customer stats returned", "total_registered" in r, str(r))
+
+r = req("GET", "/v1/admin/users/transactions", token=admin_token)
+check("Admin System-wide transactions list returned", "transactions" in r, str(r))
+
+r = req("GET", "/v1/admin/users/transactions/stats", token=admin_token)
+check("Admin Transaction stats returned", "total_volume_etb" in r, str(r))
+
+# Developers & Merchants
+r = req("GET", "/v1/admin/developers/merchants", token=admin_token)
+check("Admin Merchants list returned", "merchants" in r, str(r))
+
+r = req("GET", "/v1/admin/developers/merchants/stats", token=admin_token)
+check("Admin Merchant stats returned", "total_merchants" in r, str(r))
+
+r = req("GET", "/v1/admin/developers/merchant-transactions", token=admin_token)
+check("Admin Merchant transactions list returned", "transactions" in r, str(r))
+
+r = req("GET", "/v1/admin/developers/merchant-transactions/stats", token=admin_token)
+check("Admin Merchant transaction stats returned", "merchant_volume_etb" in r, str(r))
+
+r = req("GET", "/v1/admin/developers/apps", token=admin_token)
+check("Admin Developer apps list returned", "applications" in r, str(r))
+
+r = req("GET", "/v1/admin/developers/kyb-requests", token=admin_token)
+check("Admin KYB requests list returned", "kyb_requests" in r, str(r))
+
+r = req("PUT", "/v1/admin/developers/kyb-requests/kyb_001", body={
+    "status": "APPROVED",
+    "review_note": "Verified business TIN & license."
+}, token=admin_token)
+check("Admin KYB request approved", r.get("status") == "APPROVED", str(r))
+
+r = req("GET", "/v1/admin/developers/webhooks", token=admin_token)
+check("Admin Webhook delivery logs returned", "webhooks" in r, str(r))
+
+# Audit Logs
+r = req("GET", "/v1/admin/audit-logs", token=admin_token)
+check("Admin Audit log entries returned", "logs" in r and r.get("total", 0) >= 2, str(r))
+
 # ═══════════════════════════════════════════════════════════════════════════════
 print("\n" + "=" * 75)
 print(f"RESULTS: {PASS} passed, {FAIL} failed out of {PASS + FAIL} checks")

@@ -99,6 +99,16 @@ class SmartRouter(RoutingPort):
         self._registered.discard(bank_id)
         logger.warning("SmartRouter: rail deregistered — %s", bank_id.value)
 
+    def update_rail_config(self, bank_id: BankID, status: str, cost_weight: float) -> None:
+        """
+        Dynamically update a bank rail's status or cost parameters from the Admin Web Portal.
+        """
+        if status.upper() == "ACTIVE":
+            self.register_rail(bank_id)
+        else:
+            self.deregister_rail(bank_id)
+        logger.info("SmartRouter: dynamic configuration update for %s -> status=%s", bank_id.value, status)
+
     def evaluate_all_routes(
         self,
         amount: Decimal,

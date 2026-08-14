@@ -17,7 +17,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, DateTime, Float, Integer, Numeric, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -128,3 +128,75 @@ class LinkedAccountRecord(Base):
     is_default_sending: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_default_receiving: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     linked_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class BankConfigRecord(Base):
+    """Persisted dynamic commercial bank rail configuration."""
+    __tablename__ = "bank_configurations"
+
+    bank_id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="ACTIVE", nullable=False)
+    base_url: Mapped[str] = mapped_column(String(255), nullable=False)
+    api_key_header_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    api_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    timeout_ms: Mapped[int] = mapped_column(Integer, default=3000, nullable=False)
+    cost_weight: Mapped[float] = mapped_column(Float, default=0.20, nullable=False)
+    circuit_breaker_threshold: Mapped[float] = mapped_column(Float, default=0.50, nullable=False)
+    rolling_uptime_percent: Mapped[float] = mapped_column(Float, default=99.80, nullable=False)
+    avg_latency_ms: Mapped[int] = mapped_column(Integer, default=145, nullable=False)
+
+
+class MerchantRecord(Base):
+    """Persisted TPP merchant profile."""
+    __tablename__ = "merchants"
+
+    merchant_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    company_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    email: Mapped[str] = mapped_column(String(100), nullable=False)
+    environment: Mapped[str] = mapped_column(String(20), default="LIVE", nullable=False)
+    kyb_status: Mapped[str] = mapped_column(String(20), default="APPROVED", nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="ACTIVE", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class DeveloperAppRecord(Base):
+    """Persisted developer application for a merchant."""
+    __tablename__ = "developer_apps"
+
+    app_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    merchant_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    app_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    merchant_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    client_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    environment: Mapped[str] = mapped_column(String(20), default="LIVE", nullable=False)
+    allowed_scopes: Mapped[str] = mapped_column(Text, nullable=False)  # JSON list
+    status: Mapped[str] = mapped_column(String(20), default="ACTIVE", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class KYBRequestRecord(Base):
+    """Persisted merchant KYB verification request."""
+    __tablename__ = "kyb_requests"
+
+    kyb_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    developer_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    company_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    tax_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    requested_scopes: Mapped[str] = mapped_column(Text, nullable=False)  # JSON list
+    status: Mapped[str] = mapped_column(String(20), default="PENDING", nullable=False)
+    submitted_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class AuditLogRecord(Base):
+    """Persisted administrative action audit log."""
+    __tablename__ = "audit_logs"
+
+    log_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    action: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    actor_email: Mapped[str] = mapped_column(String(100), nullable=False)
+    ip_address: Mapped[str] = mapped_column(String(45), default="127.0.0.1", nullable=False)
+    details: Mapped[str] = mapped_column(Text, nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False)

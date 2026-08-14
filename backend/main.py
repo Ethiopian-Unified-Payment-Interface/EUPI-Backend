@@ -40,6 +40,12 @@ from backend.infrastructure.adapters.router.smart_router import SmartRouter
 from backend.infrastructure.database.sqlite_repo import SQLiteRepository
 from backend.infrastructure.database.user_repository import SQLiteUserRepository
 from backend.infrastructure.database.account_link_repository import SQLiteAccountLinkRepository
+from backend.infrastructure.database.admin_repositories import (
+    SQLiteAdminAnalyticsRepository,
+    SQLiteAuditLogRepository,
+    SQLiteBankConfigRepository,
+    SQLiteMerchantRepository,
+)
 
 # ── Application: Use-Case Orchestrators ───────────────────────────────────────
 from backend.application.use_cases.ais_service import AISService
@@ -47,6 +53,9 @@ from backend.application.use_cases.pis_service import PISService
 from backend.application.use_cases.user_registration_service import UserRegistrationService
 from backend.application.use_cases.account_linking_service import AccountLinkingService
 from backend.application.use_cases.superapp_transfer_service import SuperAppTransferService
+from backend.application.use_cases.admin_bank_service import AdminBankService
+from backend.application.use_cases.admin_merchant_service import AdminMerchantService
+from backend.application.use_cases.admin_analytics_service import AdminAnalyticsService
 
 # ── Domain ────────────────────────────────────────────────────────────────────
 from backend.domain.models.account import BankID
@@ -54,6 +63,7 @@ from backend.domain.models.account import BankID
 # ── Presentation: API Routers ─────────────────────────────────────────────────
 from backend.presentation.api_v1 import accounts, auth, payments, webhooks
 from backend.presentation.api_superapp import users, linked_accounts, transfers
+from backend.presentation.api_admin import admin_router
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Singleton instances (module-level, created once at startup)
@@ -62,6 +72,10 @@ from backend.presentation.api_superapp import users, linked_accounts, transfers
 _repo: SQLiteRepository | None = None
 _user_repo: SQLiteUserRepository | None = None
 _account_link_repo: SQLiteAccountLinkRepository | None = None
+_bank_config_repo: SQLiteBankConfigRepository | None = None
+_merchant_repo: SQLiteMerchantRepository | None = None
+_audit_repo: SQLiteAuditLogRepository | None = None
+_analytics_repo: SQLiteAdminAnalyticsRepository | None = None
 
 _ais_service: AISService | None = None
 _pis_service: PISService | None = None
@@ -69,6 +83,9 @@ _identity_port: FaydaAdapter | None = None
 _user_registration_service: UserRegistrationService | None = None
 _account_linking_service: AccountLinkingService | None = None
 _superapp_transfer_service: SuperAppTransferService | None = None
+_admin_bank_service: AdminBankService | None = None
+_admin_merchant_service: AdminMerchantService | None = None
+_admin_analytics_service: AdminAnalyticsService | None = None
 
 
 # ── DI Accessors (imported by presentation routers) ──────────────────────────
@@ -76,6 +93,11 @@ _superapp_transfer_service: SuperAppTransferService | None = None
 def get_repo() -> SQLiteRepository:
     assert _repo is not None, "Repository not initialised. Server not started via lifespan."
     return _repo
+
+
+def get_user_repository() -> SQLiteUserRepository:
+    assert _user_repo is not None, "UserRepository not initialised."
+    return _user_repo
 
 
 def get_ais_service() -> AISService:
@@ -108,6 +130,21 @@ def get_superapp_transfer_service() -> SuperAppTransferService:
     return _superapp_transfer_service
 
 
+def get_admin_bank_service() -> AdminBankService:
+    assert _admin_bank_service is not None, "AdminBankService not initialised."
+    return _admin_bank_service
+
+
+def get_admin_merchant_service() -> AdminMerchantService:
+    assert _admin_merchant_service is not None, "AdminMerchantService not initialised."
+    return _admin_merchant_service
+
+
+def get_admin_analytics_service() -> AdminAnalyticsService:
+    assert _admin_analytics_service is not None, "AdminAnalyticsService not initialised."
+    return _admin_analytics_service
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # FastAPI Lifespan — Boot & Shutdown
 # ══════════════════════════════════════════════════════════════════════════════
@@ -116,13 +153,19 @@ def get_superapp_transfer_service() -> SuperAppTransferService:
 async def lifespan(app: FastAPI):
     """Wire the full DI graph and restore DB state on startup."""
     global _repo, _user_repo, _account_link_repo
+    global _bank_config_repo, _merchant_repo, _audit_repo, _analytics_repo
     global _ais_service, _pis_service, _identity_port
     global _user_registration_service, _account_linking_service, _superapp_transfer_service
+    global _admin_bank_service, _admin_merchant_service, _admin_analytics_service
 
     # 1. Databases & Repositories
     _repo = SQLiteRepository(db_url=settings.DATABASE_URL)
     _user_repo = SQLiteUserRepository(db_url=settings.DATABASE_URL)
     _account_link_repo = SQLiteAccountLinkRepository(db_url=settings.DATABASE_URL)
+    _bank_config_repo = SQLiteBankConfigRepository(db_url=settings.DATABASE_URL)
+    _merchant_repo = SQLiteMerchantRepository(db_url=settings.DATABASE_URL)
+    _audit_repo = SQLiteAuditLogRepository(db_url=settings.DATABASE_URL)
+    _analytics_repo = SQLiteAdminAnalyticsRepository(db_url=settings.DATABASE_URL)
 
     # 2. Concrete bank adapters
     bank_ports = {
@@ -163,7 +206,22 @@ async def lifespan(app: FastAPI):
         pis_service=_pis_service,
     )
 
-    # 7. Restore in-memory payment cache from SQLite
+    # 7. Admin Services
+    _admin_bank_service = AdminBankService(
+        bank_config_repo=_bank_config_repo,
+        audit_repo=_audit_repo,
+        smart_router=router,
+    )
+    _admin_merchant_service = AdminMerchantService(
+        merchant_repo=_merchant_repo,
+        audit_repo=_audit_repo,
+    )
+    _admin_analytics_service = AdminAnalyticsService(
+        analytics_repo=_analytics_repo,
+        audit_repo=_audit_repo,
+    )
+
+    # 8. Restore in-memory payment cache from SQLite
     restored = _repo.load_all_payments()
     payments._payment_store.update(restored)
     print(f"✅ Gateway started — {len(restored)} payments restored from DB.")
@@ -285,6 +343,7 @@ app.include_router(webhooks.router,        prefix=API_V1_PREFIX)
 app.include_router(users.router,           prefix=API_V1_PREFIX)
 app.include_router(linked_accounts.router, prefix=API_V1_PREFIX)
 app.include_router(transfers.router,       prefix=API_V1_PREFIX)
+app.include_router(admin_router)
 
 
 # ── Root System Health Check ───────────────────────────────────────────────────
