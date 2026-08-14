@@ -5,7 +5,7 @@ __pycache__/
 kifiya_gateway.db
 .DS_Store
 
+PersonalDocumentations/
 temp.md
-requirements.txt
 architecture_spec.md
 api_endpoints.md
