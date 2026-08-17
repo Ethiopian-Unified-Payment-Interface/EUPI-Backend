@@ -36,86 +36,152 @@ attention it does not need. Open banking becomes a later phase, when banks sign.
 
 ## 2. System overview
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  CHANNELS                                                                   │
-│  ┌───────────────────┐  ┌───────────────────┐  ┌────────────────────────┐   │
-│  │ Super App         │  │ Admin Portal      │  │ Third-party apps       │   │
-│  │ Flutter/Riverpod  │  │ Next.js 16        │  │ (TPPs)                 │   │
-│  │ PIN + Fayda eKYC  │  │ email + password  │  │ ✗ NOT YET BUILT        │   │
-│  └─────────┬─────────┘  └─────────┬─────────┘  └───────────┬────────────┘   │
-└────────────┼──────────────────────┼────────────────────────┼────────────────┘
-     superapp_session         admin_session            client credentials
-     + per-payment PIN         + RBAC role              ╳ no auth path yet
-             │                      │                        ┆
-┌────────────▼──────────────────────▼────────────────────────┴────────────────┐
-│  LAYER 4 · PRESENTATION          FastAPI routers                            │
-│  ┌────────────────────┐ ┌──────────────────────┐ ┌───────────────────────┐  │
-│  │ /v1                │ │ /v1/superapp         │ │ /v1/admin             │  │
-│  │ auth · accounts    │ │ users · accounts     │ │ auth · dashboard      │  │
-│  │ payments · hooks   │ │ transfers            │ │ banks · customers     │  │
-│  │                    │ │ transactions         │ │ merchants · ledger    │  │
-│  │                    │ │ consents             │ │ audit                 │  │
-│  └────────────────────┘ └──────────────────────┘ └───────────────────────┘  │
-└──────────────────────────────────┬──────────────────────────────────────────┘
-                                   │  depends inward
-┌──────────────────────────────────▼──────────────────────────────────────────┐
-│  LAYER 2 · APPLICATION           use cases — orchestration only             │
-│                                                                             │
-│   AISService          PISService           SuperAppTransferService           │
-│   LedgerService       FeeService           ConsentService                   │
-│   AdminAuthService    AccountLinkingService  UserRegistrationService        │
-│   AdminBank/Merchant/AnalyticsService                                       │
-│                                                                             │
-│  ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ PORTS (abstract) ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄  │
-│   BankPort · IdentityPort · RoutingPort · PasswordHasherPort                 │
-│   IdentityVaultPort · LedgerRepositoryPort · FeeRuleRepositoryPort           │
-│   ConsentRepositoryPort · UserAppIdentityRepositoryPort · FinVaultPort       │
-│   UserRepositoryPort · AdminUserRepositoryPort · AccountLinkRepositoryPort   │
-└──────────────────────────────────┬──────────────────────────────────────────┘
-                                   │
-┌──────────────────────────────────▼──────────────────────────────────────────┐
-│  LAYER 1 · DOMAIN                pure Pydantic · zero framework imports     │
-│   Account · Transaction · Payment · Identity · User · LinkedAccount          │
-│   Ledger (entries, accounts, TransactionType) · Fee (rules, quotes)          │
-│   Consent (scopes, grants, claims) · AdminUser · pii (masking)               │
-└──────────────────────────────────▲──────────────────────────────────────────┘
-                                   │  implements ports (dependency inversion)
-┌──────────────────────────────────┴──────────────────────────────────────────┐
-│  LAYER 3 · INFRASTRUCTURE        the only layer that performs I/O           │
-│                                                                             │
-│  ┌───────────────┐ ┌──────────────┐ ┌───────────────┐ ┌─────────────────┐   │
-│  │ SmartRouter   │ │ FaydaAdapter │ │ Argon2Hasher  │ │ FernetVault     │   │
-│  │ uptime·latency│ │ eKYC · OTP   │ │ PINs, admin   │ │ FIN encryption  │   │
-│  │ ·cost+breaker │ │ consent mint │ │ passwords     │ │ + blind index   │   │
-│  └───────────────┘ └──────────────┘ └───────────────┘ └─────────────────┘   │
-│                                                                             │
-│  ┌──────────────────────────────────────────────────────────────────────┐   │
-│  │ Database (ONE engine, ONE pool)  ──►  13 repositories                │   │
-│  │ Alembic migrations                                                   │   │
-│  └──────────────────────────────────────────────────────────────────────┘   │
-│                                                                             │
-│  ┌──────────────────────────────────────────────────────────────────────┐   │
-│  │ BANK CBS ADAPTERS — all simulated                                    │   │
-│  │  Coop · CBE · Wegagen · Awash · Abyssinia · Berhan                   │   │
-│  └──────────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────────┘
-   ═══════════════ SIMULATION BOUNDARY — nothing crosses ═══════════════
-     httpx commented out · deterministic seeded data · Fayda OTP = 123456
-                                   ┆
-    ┌───────┐┌───────┐┌───────┐┌───┴───┐┌───────┐┌───────┐
-    │ COOP  ││  CBE  ││WEGAGEN││ AWASH ││ABYSS. ││BERHAN │   real banks
-    └───────┘└───────┘└───────┘└───────┘└───────┘└───────┘  (unconnected)
+Status is marked throughout: **solid** = built and verified, **dashed** = not yet
+built, **red** = blocked on something outside engineering.
+
+```mermaid
+flowchart TB
+    subgraph CH["CHANNELS"]
+        direction LR
+        SA["Super App<br/>Flutter · Riverpod<br/>PIN + Fayda eKYC"]
+        AP["Admin Portal<br/>Next.js 16<br/>email + password + RBAC"]
+        TPP["Third-party apps<br/>client credentials<br/>NOT BUILT"]
+    end
+
+    subgraph L4["LAYER 4 · PRESENTATION — FastAPI routers"]
+        direction LR
+        V1["/v1<br/>auth · accounts<br/>payments · callbacks"]
+        SUP["/v1/superapp<br/>users · accounts · transfers<br/>transactions · consents"]
+        ADM["/v1/admin<br/>auth · dashboard · banks<br/>customers · merchants<br/>ledger · audit"]
+    end
+
+    subgraph L2["LAYER 2 · APPLICATION — use cases, orchestration only"]
+        direction TB
+        UC["AISService · PISService · SuperAppTransferService<br/>LedgerService · FeeService · ConsentService<br/>AdminAuthService · AccountLinkingService<br/>UserRegistrationService · Admin*Service"]
+        CORE["CORE PORTS<br/>BankPort · IdentityPort · RoutingPort<br/>PasswordHasherPort · IdentityVaultPort<br/>Ledger · FeeRule · Consent · User · AdminUser repos"]
+        PLUG["PLUGGABLE SERVICE PORTS — Phase 4<br/>FraudCheckPort · RiskScoringPort<br/>CreditScorePort · FxRatePort"]
+    end
+
+    subgraph L1["LAYER 1 · DOMAIN — pure Pydantic, zero framework imports"]
+        DOM["Account · Transaction · Payment · Identity<br/>User · LinkedAccount · AdminUser<br/>Ledger · Fee · Consent · pii"]
+    end
+
+    subgraph L3["LAYER 3 · INFRASTRUCTURE — the only layer that performs I/O"]
+        direction TB
+        ADAPT["SmartRouter · FaydaAdapter<br/>Argon2PasswordHasher · FernetIdentityVault"]
+        DB["Database — ONE engine, ONE pool<br/>13 repositories · Alembic migrations"]
+        CBS["BANK CBS ADAPTERS — all simulated<br/>Coop · CBE · Wegagen · Awash · Abyssinia · Berhan"]
+        PLUGADAPT["SERVICE ADAPTERS — Phase 4<br/>in-house fraud rules first, vendors later"]
+    end
+
+    subgraph EXT["EXTERNAL"]
+        direction LR
+        BANKS["Real bank core systems<br/>UNCONNECTED"]
+        PG[("PostgreSQL 16")]
+        VENDORS["Fraud · Risk · Credit bureau · FX<br/>NOT INTEGRATED"]
+        ETHSW["EthSwitch<br/>cross-bank settlement<br/>NOT INTEGRATED"]
+    end
+
+    SA -->|"superapp_session<br/>+ per-payment PIN"| L4
+    AP -->|"admin_session"| L4
+    TPP -.->|"no auth path yet"| L4
+
+    L4 --> UC
+    UC --> CORE
+    UC -.-> PLUG
+    UC --> DOM
+    CORE -.->|"implemented by"| ADAPT
+    CORE -->|"implemented by"| DB
+    CORE -->|"implemented by"| CBS
+    PLUG -.->|"implemented by"| PLUGADAPT
+
+    DB --> PG
+    CBS -.->|"SIMULATION BOUNDARY<br/>httpx commented out"| BANKS
+    PLUGADAPT -.-> VENDORS
+    CBS -.-> ETHSW
+
+    classDef built fill:#0f3d2e,stroke:#2e9e6b,color:#e8f5ee
+    classDef planned fill:#2a2a2a,stroke:#888,color:#ddd,stroke-dasharray: 5 4
+    classDef blocked fill:#3d1f1f,stroke:#c0504d,color:#f5e8e8,stroke-dasharray: 5 4
+    classDef store fill:#1f2f3d,stroke:#4a90c0,color:#e8f0f5
+
+    class SA,AP,V1,SUP,ADM,UC,CORE,DOM,ADAPT,DB built
+    class TPP,PLUG,PLUGADAPT,VENDORS planned
+    class CBS,BANKS,ETHSW blocked
+    class PG store
 ```
 
-Two things this diagram is meant to make obvious:
+Two things this is meant to make obvious:
 
-1. **The left edge is closed.** Every bank rail is a simulation. For a sandbox
-   product that is the correct answer — it is what Stripe and Tink both ship —
-   but no live CBS integration exists, and that gates all revenue.
-2. **The right edge has no door.** Third-party developers cannot authenticate.
-   `/v1` exists but there is no client-credentials flow, no `app_id` tenancy
-   scoping, no rate limits.
+1. **The bottom edge is closed.** Every bank rail is a simulation. For a sandbox
+   product that is the correct answer — it is what Stripe and Tink both ship — but
+   no live CBS integration exists, and that gates all revenue.
+2. **The top-right edge has no door.** Third-party developers cannot
+   authenticate. `/v1` exists but there is no client-credentials flow, no `app_id`
+   tenancy scoping, and no rate limits.
+
+### Pluggable services — the Phase 4 seam
+
+The dashed `PLUG` group is the extension point for capabilities EUPI will not
+build itself. It is cheap precisely because the hexagonal design already exists:
+each is a port alongside `BankPort`, so swapping an in-house implementation for a
+vendor touches one adapter and no use case.
+
+```mermaid
+flowchart LR
+    PIS["PISService"]
+
+    subgraph PORTS["Ports — Layer 2"]
+        direction TB
+        FR["FraudCheckPort"]
+        RS["RiskScoringPort"]
+        CS["CreditScorePort"]
+        FX["FxRatePort"]
+    end
+
+    subgraph IMPL["First implementation — Layer 3"]
+        direction TB
+        FRI["In-house rules<br/>velocity · amount thresholds<br/>first-time recipient"]
+        RSI["Null implementation"]
+        CSI["Null implementation"]
+        FXI["Interface only —<br/>nothing behind it"]
+    end
+
+    subgraph LATER["Later"]
+        direction TB
+        FRV["Fraud vendor"]
+        RSV["Risk vendor"]
+        CSV["NBE credit<br/>reference bureau"]
+        FXV["FX provider —<br/>DEFERRED"]
+    end
+
+    PIS -->|"before order_payment"| FR
+    PIS --> RS
+    PIS --> CS
+    PIS --> FX
+
+    FR --> FRI --> FRV
+    RS --> RSI --> RSV
+    CS --> CSI --> CSV
+    FX --> FXI --> FXV
+
+    classDef planned fill:#2a2a2a,stroke:#888,color:#ddd,stroke-dasharray: 5 4
+    classDef built fill:#0f3d2e,stroke:#2e9e6b,color:#e8f5ee
+    classDef deferred fill:#3d1f1f,stroke:#c0504d,color:#f5e8e8,stroke-dasharray: 5 4
+
+    class PIS built
+    class FR,RS,CS,FRI,RSI,CSI,FRV,RSV,CSV planned
+    class FX,FXI,FXV deferred
+```
+
+`FraudCheckPort` is the only one with real work behind it: it wires into the
+payment flow **before** `order_payment`, so a blocked payment never reaches the
+bank. The rest exist so the seam is not a rewrite later.
+
+**`FxRatePort` is deliberately empty.** Ethiopian forex is tightly controlled and
+cross-border remittance is a separate licence and a separate business. The
+interface should exist; nothing should be built behind it until that is a
+deliberate decision.
 
 ---
 
@@ -139,28 +205,74 @@ waiting to be filled, not new ones to cut.
 
 ## 4. Data model
 
-```
-users ──────────────┬─── linked_accounts ──── (bank_id, account_number)
-  username (PK)     │      UNIQUE(username, bank_id, account_number)
-  fin_encrypted     │      is_default_sending / is_default_receiving
-  fin_blind_index   │
-  fin_last4         ├─── user_app_identities ── psu_id (per-app pseudonym)
-  pin_hash (argon2) │      UNIQUE(username, app_id)
-  failed_pin_attempts
-  pin_locked_until  ├─── consents ── (app_id, scope, status, expires_at)
-                    │
-                    └─── fin_vault ── blind_index (UNIQUE) + ciphertext
+```mermaid
+erDiagram
+    USERS ||--o{ LINKED_ACCOUNTS : "links"
+    USERS ||--o{ USER_APP_IDENTITIES : "one pseudonym per app"
+    USERS ||--o{ CONSENTS : "grants"
+    USERS ||--|| FIN_VAULT : "encrypted national ID"
+    PAYMENTS ||--o{ LEDGER_ENTRIES : "posts a balanced set"
+    PAYMENTS ||--o{ WEBHOOK_EVENTS : "delivery log"
+    FEE_RULES ||..o{ PAYMENTS : "priced by rule_id + version"
 
-payments ─────────── ledger_entries ── append-only, is_mirror splits two books
-  end_to_end_id (UNIQUE, idempotency)     amount NUMERIC(18,2)
-  debtor/creditor bank + account          transaction_ref groups a balanced set
-  selected_rail (router's choice)
-  consent_token (carries consent_method)
-
-fee_rules ── PK(rule_id, version) ── never edited in place
-admin_users · consent_tokens · webhook_events · bank_configurations
-merchants · developer_apps · kyb_requests · audit_logs
+    USERS {
+        string username PK
+        text fin_encrypted "Fernet — only place the value survives"
+        string fin_blind_index UK "keyed HMAC — lookups without decrypting"
+        string fin_last4 "masked suffix — no decryption capability"
+        string pin_hash "argon2id"
+        int failed_pin_attempts
+        datetime pin_locked_until
+    }
+    LINKED_ACCOUNTS {
+        string link_id PK
+        string bank_id UK "UNIQUE(username, bank_id, account_number)"
+        string account_number UK
+        bool is_default_sending
+        bool is_default_receiving
+    }
+    USER_APP_IDENTITIES {
+        string psu_id PK "the only user ID a developer sees"
+        string app_id UK "UNIQUE(username, app_id)"
+    }
+    CONSENTS {
+        string consent_id PK
+        string scope "one row per scope"
+        string status
+        datetime expires_at "evaluated on read"
+    }
+    FIN_VAULT {
+        string username PK
+        string fin_blind_index UK
+        text fin_ciphertext
+    }
+    PAYMENTS {
+        string payment_id PK
+        string end_to_end_id UK "idempotency key"
+        string debtor_bank_id
+        string creditor_bank_id
+        string selected_rail "router's choice, not the debtor"
+        decimal amount "NUMERIC(18,2)"
+        text consent_token "carries consent_method"
+    }
+    LEDGER_ENTRIES {
+        string entry_id PK
+        string transaction_ref "groups a balanced set"
+        string direction "DEBIT or CREDIT"
+        decimal amount "NUMERIC(18,2)"
+        bool is_mirror "splits the two books"
+        string app_id "tenancy — not yet populated"
+    }
+    FEE_RULES {
+        string rule_id PK
+        int version PK "never edited in place"
+        int revenue_share_bps
+        bool is_active
+    }
 ```
+
+Other tables: `admin_users`, `consent_tokens`, `bank_configurations`,
+`merchants`, `developer_apps`, `kyb_requests`, `audit_logs`, `alembic_version`.
 
 ### Three decisions worth understanding
 
@@ -208,15 +320,28 @@ access to banking endpoints it was never issued for.
 
 ### Consent for a payment
 
-```
-Fayda path                          Super App path
-──────────                          ──────────────
-POST /v1/auth/fayda                 POST /v1/superapp/transfers { pin }
-  → OTP dispatched                    → PIN verified (argon2 + lockout)
-POST /v1/auth/fayda/confirm           → 2-min gateway token minted
-  → gateway_access, 1h                  consent_method=superapp_pin
-                                        │
-        └──────────► PIS: initiate → verify → order ◄──────┘
+```mermaid
+flowchart TB
+    subgraph FP["Fayda path — third-party or direct PIS"]
+        direction TB
+        F1["POST /v1/auth/fayda"] --> F2["OTP dispatched"]
+        F2 --> F3["POST /v1/auth/fayda/confirm"]
+        F3 --> F4["gateway_access, 1h<br/>consent_method=fayda_otp"]
+    end
+
+    subgraph SP["Super App path — handle-based P2P"]
+        direction TB
+        S1["POST /v1/superapp/transfers<br/>with pin"] --> S2["PIN verified<br/>argon2 + lockout"]
+        S2 --> S3["gateway token minted, 2 min<br/>consent_method=superapp_pin"]
+    end
+
+    PIS["PIS: initiate → verify → order<br/>ONE validation path —<br/>signature, expiry, revocation, KYC level"]
+
+    F4 --> PIS
+    S3 --> PIS
+
+    classDef built fill:#0f3d2e,stroke:#2e9e6b,color:#e8f5ee
+    class F1,F2,F3,F4,S1,S2,S3,PIS built
 ```
 
 Both paths produce a real signed gateway token, tracked for revocation and
@@ -236,23 +361,49 @@ PIN-authorised payment and an OTP-authorised one are not equivalent evidence.
 The flow the platform is really about: two usernames and an amount in, four
 banking details derived.
 
-```
-POST /v1/superapp/transfers
-  { sender_username, recipient_username, amount, pin, client_reference }
-        │
-        ├─ 1. PIN verified                         → consent
-        ├─ 2. recipient resolved by handle         → creditor_name
-        ├─ 3. sender's   default SENDING account   → debtor bank + account
-        ├─ 4. recipient's default RECEIVING account→ creditor bank + account
-        ├─ 5. TransactionType.classify()           → INTRA_BANK | CROSS_BANK
-        ├─ 6. balance check at the debtor bank
-        ├─ 7. FeeService.quote()                   → customer fee + EUPI share
-        └─ 8. initiate → verify → order            → ORDERED
-                                                        │
-                          bank callback ────────────────┘
-                                │
-                                ├─ payment → SUCCESS
-                                └─ LedgerService posts a balanced entry set
+```mermaid
+sequenceDiagram
+    autonumber
+    participant App as Super App
+    participant API as /v1/superapp/transfers
+    participant Reg as UserRegistrationService
+    participant Fayda as FaydaAdapter
+    participant Xfer as SuperAppTransferService
+    participant PIS as PISService
+    participant Fee as FeeService
+    participant Bank as Bank CBS
+    participant Ldg as LedgerService
+
+    App->>API: sender, recipient, amount, pin, client_reference
+    API->>API: idempotency check — return original if seen
+    API->>Xfer: send_money(...)
+
+    Xfer->>Reg: authorise_with_pin
+    Note over Reg: argon2 verify + lockout.<br/>PIN required per transfer:<br/>a session token is a bearer<br/>credential and would let a<br/>leaked token drain the account.
+    Reg-->>Xfer: payer
+
+    Xfer->>Xfer: resolve recipient by handle
+    Xfer->>Xfer: sender's default SENDING → debtor
+    Xfer->>Xfer: recipient's default RECEIVING → creditor
+    Xfer->>Xfer: classify INTRA_BANK vs CROSS_BANK
+    Xfer->>Bank: balance check at debtor bank
+
+    Xfer->>Fayda: issue_delegated_consent_token
+    Note over Fayda: 2-min gateway token,<br/>consent_method=superapp_pin
+    Fayda-->>Xfer: consent token
+
+    Xfer->>PIS: initiate → verify → order
+    PIS->>Fee: quote — debtor's bank, not routed rail
+    Fee-->>PIS: customer_fee + eupi_revenue
+    PIS->>Bank: submit debit order
+    Bank-->>PIS: bank_order_reference
+    PIS-->>App: ORDERED
+
+    Bank->>API: POST /v1/callbacks — confirmed
+    API->>PIS: process_callback
+    PIS->>Ldg: record_settled_payment
+    Note over Ldg: Two balanced books:<br/>mirror legs for bank movement,<br/>revenue legs for EUPI's share.<br/>Signed total must be 0.
+    PIS-->>API: SUCCESS
 ```
 
 `INTRA_BANK` matters strategically: both accounts in one CBS is an internal book
@@ -267,17 +418,30 @@ bank and watch another be debited.
 
 ## 7. Deployment
 
-```
-docker compose up --build
+```mermaid
+flowchart LR
+    subgraph HOST["docker compose up --build"]
+        direction LR
+        PG[("postgres:16-alpine<br/>:5432<br/>volume: eupi-postgres")]
+        BE["backend :8000<br/>entrypoint:<br/>wait for db →<br/>alembic upgrade head →<br/>uvicorn"]
+        FE["admin-portal<br/>host :3001 → :3000<br/>Next.js standalone"]
+    end
 
-┌──────────────┐   ┌────────────────────┐   ┌──────────────────┐
-│ postgres:16  │◄──│ backend            │◄──│ admin-portal     │
-│ :5432        │   │ :8000              │   │ :3001 → :3000    │
-│ eupi-postgres│   │ entrypoint:        │   │ Next standalone  │
-│ (volume)     │   │  wait → alembic    │   │                  │
-│              │   │  upgrade head →    │   │                  │
-│              │   │  uvicorn           │   │                  │
-└──────────────┘   └────────────────────┘   └──────────────────┘
+    BROWSER["Browser"]
+    DEVICE["Android device<br/>adb reverse tcp:8000"]
+
+    BE -->|"depends_on: service_healthy"| PG
+    FE -->|"depends_on: service_healthy"| BE
+    BROWSER --> FE
+    BROWSER -->|"NEXT_PUBLIC_API_URL<br/>baked at build time"| BE
+    DEVICE -->|"127.0.0.1:8000<br/>tunnelled over USB/WiFi"| BE
+
+    classDef svc fill:#0f3d2e,stroke:#2e9e6b,color:#e8f5ee
+    classDef store fill:#1f2f3d,stroke:#4a90c0,color:#e8f0f5
+    classDef client fill:#2f2a3d,stroke:#8a7fc0,color:#efe8f5
+    class BE,FE svc
+    class PG store
+    class BROWSER,DEVICE client
 ```
 
 **Migrations run in the entrypoint, not application startup.** A failed migration
