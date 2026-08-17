@@ -12,16 +12,18 @@ Responsibilities:
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 # Domain imports only
 from backend.domain.models.user import PublicUserProfile, SuperAppUser
 
 # Application-layer port contracts only — never concrete adapters
+from backend.application.ports.identity_port import IdentityPort
+from backend.application.ports.password_hasher_port import PasswordHasherPort
 from backend.application.ports.user_repository_port import UserRepositoryPort
+from backend.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -34,21 +36,130 @@ class UserRegistrationService:
     User Registration Use-Case Orchestrator.
 
     Injected dependencies (constructor injection / Dependency Inversion):
-      - user_repo: A UserRepositoryPort for persisting user accounts.
+      - user_repo:       A UserRepositoryPort for persisting user accounts.
+      - password_hasher: A PasswordHasherPort for PIN hashing and verification.
+      - identity_port:   An IdentityPort for Fayda eKYC.
     """
 
     def __init__(
         self,
         user_repo: UserRepositoryPort,
+        password_hasher: PasswordHasherPort,
         identity_port: IdentityPort | None = None,
     ) -> None:
         self._user_repo = user_repo
+        self._password_hasher = password_hasher
         self._identity_port = identity_port
 
+    # ── PIN lockout helpers ───────────────────────────────────────────────────
+
     @staticmethod
-    def _hash_pin(pin: str) -> str:
-        """Hash a 6-digit PIN with SHA-256. Never store plaintext PINs."""
-        return hashlib.sha256(pin.encode()).hexdigest()
+    def _remaining_lockout(user: SuperAppUser) -> timedelta | None:
+        """Return how long a user stays locked out, or None if not locked."""
+        if user.pin_locked_until is None:
+            return None
+        remaining = user.pin_locked_until - datetime.now(tz=timezone.utc)
+        return remaining if remaining.total_seconds() > 0 else None
+
+    def _register_failed_attempt(self, user: SuperAppUser) -> None:
+        """
+        Increment the failed-attempt counter and lock the account at the limit.
+
+        Throttling is per-account and persisted, so it survives a restart and
+        cannot be reset by reconnecting.
+        """
+        attempts = user.failed_pin_attempts + 1
+        locked_until: datetime | None = None
+
+        if attempts >= settings.PIN_MAX_ATTEMPTS:
+            locked_until = datetime.now(tz=timezone.utc) + timedelta(
+                seconds=settings.PIN_LOCKOUT_SECONDS
+            )
+            logger.warning(
+                "PIN lockout triggered",
+                extra={"username": user.username, "attempts": attempts},
+            )
+
+        self._user_repo.update_pin_security(user.username, attempts, locked_until)
+
+    def _clear_failed_attempts(self, user: SuperAppUser) -> None:
+        """Reset throttling counters after a successful verification."""
+        if user.failed_pin_attempts or user.pin_locked_until:
+            self._user_repo.update_pin_security(user.username, 0, None)
+
+    def _verify_pin_or_raise(self, user: SuperAppUser, pin: str) -> None:
+        """
+        Verify a PIN, enforcing lockout and migrating legacy hashes.
+
+        Raises:
+            PINLockedError:  Too many recent failures.
+            InvalidPINError: No PIN set, or the PIN does not match.
+        """
+        remaining = self._remaining_lockout(user)
+        if remaining is not None:
+            raise PINLockedError(
+                f"Too many incorrect attempts. Try again in "
+                f"{int(remaining.total_seconds() // 60) + 1} minute(s)."
+            )
+
+        if user.pin_hash is None:
+            raise InvalidPINError("Incorrect PIN.")
+
+        if not self._password_hasher.verify(pin, user.pin_hash):
+            self._register_failed_attempt(user)
+            raise InvalidPINError("Incorrect PIN.")
+
+        # Correct PIN. Upgrade the stored hash if it predates argon2id, so
+        # legacy SHA-256 credentials migrate on first successful login.
+        if self._password_hasher.needs_rehash(user.pin_hash):
+            self._user_repo.update_pin_hash(user.username, self._password_hasher.hash(pin))
+            logger.info("Migrated PIN hash to current scheme", extra={"username": user.username})
+
+        self._clear_failed_attempts(user)
+
+    def authorise_with_pin(self, username: str, pin: str) -> SuperAppUser:
+        """
+        Verify a PIN as an authorisation decision, without issuing a session.
+
+        Distinct from `verify_pin`, which is login. This is the transaction-PIN
+        check: the user is already signed in, and re-entering the PIN is what
+        authorises a specific action such as a transfer.
+
+        Requiring the PIN per payment rather than accepting the session token is
+        the point. A session token is a bearer credential valid for an hour; if
+        one leaked, accepting it as payment authorisation would let the holder
+        drain the account. The PIN is something only the account holder knows,
+        and it is verified here against the same argon2 hash and the same
+        lockout counters as login — so brute-forcing it through this path is
+        throttled exactly as it is through the front door.
+
+        Args:
+            username: The signed-in user's handle.
+            pin:      The 6-digit PIN, re-entered to authorise this action.
+
+        Returns:
+            The authenticated :class:`~domain.models.user.SuperAppUser`.
+
+        Raises:
+            UserNotFoundError:    No such user.
+            AccountInactiveError: Account is deactivated.
+            InvalidPINError:      PIN does not match.
+            PINLockedError:       Too many recent failures.
+        """
+        from backend.domain.models.user import normalize_username
+
+        full_username = normalize_username(username)
+        user = self._user_repo.get_by_username(full_username)
+        if user is None:
+            raise UserNotFoundError(f"No user found with username '{username}'.")
+
+        if not user.is_active:
+            raise AccountInactiveError(f"Account '{username}' is deactivated.")
+
+        self._verify_pin_or_raise(user, pin)
+
+        logger.info("PIN authorisation granted", extra={"username": user.username})
+        return user
 
     def request_registration_otp(self, fin: str, phone_number: str) -> str:
         """
@@ -266,7 +377,7 @@ class UserRegistrationService:
             fin=fin,
             full_name=verified_full_name,
             phone_number=verified_phone,
-            pin_hash=self._hash_pin(pin),
+            pin_hash=self._password_hasher.hash(pin),
             created_at=datetime.now(tz=timezone.utc),
             is_active=True,
         )
@@ -323,6 +434,8 @@ class UserRegistrationService:
         Raises:
             UserNotFoundError: If no user exists with this username.
             InvalidPINError:   If the PIN does not match.
+            PINLockedError:    If the account is temporarily locked after
+                               too many failed attempts.
             AccountInactiveError: If the account is deactivated.
         """
         from backend.domain.models.user import normalize_username
@@ -338,8 +451,7 @@ class UserRegistrationService:
                 f"Account '{username}' is deactivated."
             )
 
-        if user.pin_hash is None or user.pin_hash != self._hash_pin(pin):
-            raise InvalidPINError("Incorrect PIN.")
+        self._verify_pin_or_raise(user, pin)
 
         from backend.infrastructure.auth.jwt_handler import create_superapp_session_jwt
         from backend.main import get_repo
@@ -375,6 +487,8 @@ class UserRegistrationService:
         Raises:
             UserNotFoundError: If the username doesn't exist.
             InvalidPINError:   If the current PIN is wrong or new PIN format is invalid.
+            PINLockedError:    If the account is temporarily locked after
+                               too many failed attempts.
         """
         from backend.domain.models.user import normalize_username
         full_username = normalize_username(username)
@@ -382,13 +496,14 @@ class UserRegistrationService:
         if user is None:
             raise UserNotFoundError(f"User '{username}' not found.")
 
-        if user.pin_hash is None or user.pin_hash != self._hash_pin(current_pin):
-            raise InvalidPINError("Current PIN is incorrect.")
+        # Same throttling as login — otherwise change-PIN becomes an
+        # unthrottled oracle for guessing the current PIN.
+        self._verify_pin_or_raise(user, current_pin)
 
         if not new_pin.isdigit() or len(new_pin) != 6:
             raise InvalidPINError("New PIN must be exactly 6 digits.")
 
-        self._user_repo.update_pin_hash(full_username, self._hash_pin(new_pin))
+        self._user_repo.update_pin_hash(full_username, self._password_hasher.hash(new_pin))
 
         logger.info(
             "PIN changed",
@@ -420,6 +535,9 @@ class UserNotFoundError(RegistrationError):
 
 class InvalidPINError(RegistrationError):
     """Raised when a PIN doesn't meet format requirements or doesn't match."""
+
+class PINLockedError(RegistrationError):
+    """Raised when PIN authentication is temporarily refused after repeated failures."""
 
 class InvalidOTPError(RegistrationError):
     """Raised when an OTP code is invalid or expired."""

@@ -2,7 +2,11 @@
 __pycache__/
 *.pyc
 .env
-kifiya_gateway.db
+# Any SQLite database, not just the default filename. These hold real FINs,
+# phone numbers, and PIN hashes — committing one is a PII disclosure.
+*.db
+*.db-journal
+*.sqlite3
 .DS_Store
 
 PersonalDocumentations/

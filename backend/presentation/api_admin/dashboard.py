@@ -8,7 +8,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query, status
 
 from backend.domain.models.admin import ActivityItem, DashboardStats
-from backend.presentation.api_admin.auth_deps import get_current_admin_user
+from backend.domain.models.admin_user import AdminUser
+from backend.presentation.api_admin.auth_deps import get_current_admin_user, require_admin
 
 router = APIRouter(prefix="/dashboard", tags=["Admin — Dashboard & Analytics"])
 
@@ -21,7 +22,7 @@ router = APIRouter(prefix="/dashboard", tags=["Admin — Dashboard & Analytics"]
     description="Returns high-level KPI stat cards for total users, developers, bank rails, and transactions.",
 )
 def get_dashboard_stats(
-    admin: dict = Depends(get_current_admin_user),
+    admin: AdminUser = Depends(get_current_admin_user),
 ) -> DashboardStats:
     from backend.main import get_admin_analytics_service
     service = get_admin_analytics_service()
@@ -37,7 +38,7 @@ def get_dashboard_stats(
 )
 def get_activity_feed(
     limit: int = Query(default=20, ge=1, le=100),
-    admin: dict = Depends(get_current_admin_user),
+    admin: AdminUser = Depends(get_current_admin_user),
 ) -> dict[str, list[ActivityItem]]:
     from backend.main import get_admin_analytics_service
     service = get_admin_analytics_service()

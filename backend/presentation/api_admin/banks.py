@@ -12,7 +12,8 @@ from pydantic import BaseModel, Field
 
 from backend.domain.models.account import BankID
 from backend.domain.models.admin import BankConfig, BankRailStatus
-from backend.presentation.api_admin.auth_deps import get_current_admin_user
+from backend.domain.models.admin_user import AdminUser
+from backend.presentation.api_admin.auth_deps import get_current_admin_user, require_admin
 
 router = APIRouter(prefix="/banks", tags=["Admin — Bank Rail Management"])
 
@@ -56,7 +57,7 @@ class BankResponse(BaseModel):
     description="Returns all registered commercial bank adapters and their live status.",
 )
 def list_bank_rails(
-    admin: dict = Depends(get_current_admin_user),
+    admin: AdminUser = Depends(get_current_admin_user),
 ) -> dict[str, list[BankConfig]]:
     from backend.main import get_admin_bank_service
     service = get_admin_bank_service()
@@ -72,7 +73,7 @@ def list_bank_rails(
 )
 def get_bank_rail(
     bank_id: str,
-    admin: dict = Depends(get_current_admin_user),
+    admin: AdminUser = Depends(get_current_admin_user),
 ) -> BankConfig:
     from backend.main import get_admin_bank_service
     service = get_admin_bank_service()
@@ -95,7 +96,7 @@ def get_bank_rail(
 )
 def create_bank_rail(
     body: BankConfigRequest,
-    admin: dict = Depends(get_current_admin_user),
+    admin: AdminUser = Depends(require_admin),
 ) -> BankResponse:
     from backend.main import get_admin_bank_service
     service = get_admin_bank_service()
@@ -110,7 +111,7 @@ def create_bank_rail(
         timeout_ms=body.timeout_ms,
         cost_weight=body.cost_weight,
         circuit_breaker_threshold=body.circuit_breaker_threshold,
-        actor_email=admin.get("email", "admin@kifiya.com"),
+        actor_email=admin.email,
     )
     return BankResponse(bank_id=body.bank_id, message="Bank rail configuration created successfully.")
 
@@ -124,7 +125,7 @@ def create_bank_rail(
 def update_bank_rail(
     bank_id: str,
     body: BankConfigUpdatePayload,
-    admin: dict = Depends(get_current_admin_user),
+    admin: AdminUser = Depends(require_admin),
 ) -> BankResponse:
     from backend.main import get_admin_bank_service
     service = get_admin_bank_service()
@@ -144,6 +145,6 @@ def update_bank_rail(
         timeout_ms=body.timeout_ms,
         cost_weight=body.cost_weight,
         circuit_breaker_threshold=body.circuit_breaker_threshold,
-        actor_email=admin.get("email", "admin@kifiya.com"),
+        actor_email=admin.email,
     )
     return BankResponse(bank_id=b_enum, message="Bank rail configuration updated successfully.")

@@ -303,6 +303,25 @@ def complete_registration(body: CompleteRegistrationRequest) -> SuperAppUserResp
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
+    # Vault the national ID immediately on account creation. Composed here
+    # rather than inside UserRegistrationService so the registration use case
+    # keeps depending only on its own ports.
+    #
+    # Best-effort: the account already exists at this point, and failing the
+    # response would leave the user with an account they were told was not
+    # created. The gap is logged loudly and is repairable by re-vaulting.
+    try:
+        from backend.main import get_consent_service
+
+        get_consent_service().vault_fin(user.username, user.fin)
+    except Exception:  # noqa: BLE001 — see above
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "Failed to vault the FIN for a newly registered user.",
+            extra={"username": user.username},
+        )
+
     return SuperAppUserResponse(
         username=user.username,
         fin=user.fin,
@@ -325,11 +344,18 @@ def complete_registration(body: CompleteRegistrationRequest) -> SuperAppUserResp
     ),
 )
 def login_with_pin(body: PinLoginRequest) -> PinLoginResponse:
+    from backend.application.use_cases.user_registration_service import PINLockedError
     from backend.main import get_user_registration_service
     service = get_user_registration_service()
 
     try:
         user, session_token = service.verify_pin(username=body.username, pin=body.pin)
+    except PINLockedError as exc:
+        # 429 rather than 401 so the client can show a wait-and-retry state
+        # instead of prompting for the PIN again.
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)
+        )
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
 
@@ -356,8 +382,8 @@ def logout_user(
     from backend.main import get_repo
     token = (authorization[7:].strip() if authorization and authorization.lower().startswith("bearer ") else x_session_token)
     if token:
-        from backend.infrastructure.auth.jwt_handler import get_jti
-        jti = get_jti(token)
+        from backend.infrastructure.auth.jwt_handler import get_jti_for_revocation
+        jti = get_jti_for_revocation(token)
         if jti:
             get_repo().revoke_token(jti)
     return MessageResponse(message="Logged out successfully. Session invalidated.")
@@ -381,11 +407,16 @@ def change_pin(
     if normalize_username(current_user.username) != normalize_username(body.username):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot change PIN for another user.")
 
+    from backend.application.use_cases.user_registration_service import PINLockedError
     try:
         service.change_pin(
             username=body.username,
             current_pin=body.current_pin,
             new_pin=body.new_pin,
+        )
+    except PINLockedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)
         )
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))

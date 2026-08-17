@@ -1,5 +1,5 @@
 """
-SQLite Account Link Repository
+Account Link Repository
 Layer: 🔴 LAYER 3 — Infrastructure / Database
 Rule: Concrete implementation of the AccountLinkRepositoryPort abstract interface.
 """
@@ -10,47 +10,26 @@ from datetime import timezone
 from contextlib import contextmanager
 from typing import Generator
 
-from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
 from backend.application.ports.account_link_repository_port import (
     AccountLinkRepositoryPort,
 )
-from backend.config import settings
 from backend.domain.models.account import BankID
 from backend.domain.models.linked_account import AccountDirection, LinkedAccount
+from backend.infrastructure.database.session import RepositoryBase
 from backend.infrastructure.database.models import Base, LinkedAccountRecord
 
 
-class SQLiteAccountLinkRepository(AccountLinkRepositoryPort):
+class AccountLinkRepository(RepositoryBase, AccountLinkRepositoryPort):
     """
-    SQLite-backed implementation of AccountLinkRepositoryPort.
+    Relational implementation of AccountLinkRepositoryPort.
     
     Provides CRUD operations for linked bank accounts persisted
     in the `linked_accounts` table.
     """
 
-    def __init__(self, db_url: str = settings.DATABASE_URL) -> None:
-        self._engine = create_engine(
-            db_url,
-            connect_args={"check_same_thread": False},
-            echo=settings.DEBUG,
-        )
-        Base.metadata.create_all(self._engine)
-        self._session_factory = sessionmaker(bind=self._engine, autoflush=False)
 
-    @contextmanager
-    def _session(self) -> Generator[Session, None, None]:
-        """Provide a transactional scope."""
-        session = self._session_factory()
-        try:
-            yield session
-            session.commit()
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
 
     def add_link(self, link: LinkedAccount) -> None:
         record = LinkedAccountRecord(

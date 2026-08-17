@@ -6,7 +6,7 @@ Rule: ZERO external framework imports. Pure Python + Pydantic only.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
 
@@ -40,7 +40,7 @@ class SuperAppUser(BaseModel):
         examples=["+251911234567"],
     )
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=lambda: datetime.now(tz=timezone.utc),
         description="UTC timestamp of account creation.",
     )
     is_active: bool = Field(
@@ -49,8 +49,24 @@ class SuperAppUser(BaseModel):
     )
     pin_hash: str | None = Field(
         default=None,
-        description="SHA-256 hash of the user's 6-digit PIN. Never stored in plaintext.",
+        description=(
+            "Salted argon2id hash of the user's 6-digit PIN. Never stored in "
+            "plaintext, never serialized in API responses."
+        ),
         exclude=True,  # Never serialized in API responses
+    )
+    failed_pin_attempts: int = Field(
+        default=0,
+        description="Consecutive failed PIN attempts. Reset to 0 on success.",
+        exclude=True,
+    )
+    pin_locked_until: datetime | None = Field(
+        default=None,
+        description=(
+            "UTC timestamp until which PIN authentication is refused. Set once "
+            "failed attempts reach the configured threshold."
+        ),
+        exclude=True,
     )
 
     model_config = {
@@ -62,7 +78,6 @@ class SuperAppUser(BaseModel):
                 "phone_number": "+251911234567",
                 "created_at": "2026-08-11T10:30:00Z",
                 "is_active": True,
-                "pin_hash": "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
             }
         }
     }

@@ -30,7 +30,7 @@ from backend.domain.models.identity import (
     KYCLevel,
 )
 from backend.infrastructure.auth import jwt_handler
-from backend.infrastructure.database.sqlite_repo import SQLiteRepository
+from backend.infrastructure.database.payment_repository import PaymentRepository
 from backend.infrastructure.mock_data.fayda_registry import get_identity
 
 logger = logging.getLogger(__name__)
@@ -45,14 +45,14 @@ class FaydaAdapter(IdentityPort):
     Fayda National ID eKYC Adapter.
 
     Manages the two-step OTP verification flow and issues gateway JWTs
-    on successful verification. Relies on the SQLiteRepository to persist
+    on successful verification. Relies on the PaymentRepository to persist
     token records for revocation tracking.
 
     Production wiring: replace `_mock_dispatch_otp()` and
     `_mock_confirm_otp()` with real httpx calls to the Fayda OIDC endpoint.
     """
 
-    def __init__(self, repo: SQLiteRepository) -> None:
+    def __init__(self, repo: PaymentRepository) -> None:
         self._repo = repo
         # In-memory OTP session store: session_id → (request, otp, expires_at)
         self._sessions: dict[str, tuple[FaydaVerifyRequest, str, datetime]] = {}
@@ -169,6 +169,55 @@ class FaydaAdapter(IdentityPort):
             consent_token=token,                 # Real signed JWT
             granted_scopes=scopes,
         )
+
+    def issue_delegated_consent_token(
+        self,
+        fin: str,
+        scopes: list[str],
+        kyc_level: KYCLevel,
+        consent_method: str,
+        ttl_seconds: int,
+    ) -> str:
+        """
+        Issue a consent token for a principal the caller already authenticated.
+
+        Used when authorisation came from something other than a Fayda OTP — a
+        Super App transaction PIN in practice. The token is minted, recorded for
+        revocation, and validated by exactly the same path as an OTP-derived
+        one, so PISService needs no alternative, weaker branch.
+
+        The FIN is still checked against the national registry: an identity that
+        is not in Fayda cannot be vouched for by anything, regardless of how
+        convincingly the caller authenticated the session.
+        """
+        if get_identity(fin) is None:
+            raise ValueError(
+                f"FIN '{fin}' not found in the Fayda national registry. "
+                "Cannot issue a consent token."
+            )
+
+        token, jti, expires_at = jwt_handler.create_gateway_jwt(
+            fin=fin,
+            scopes=scopes,
+            kyc_level=kyc_level.value,
+            consent_method=consent_method,
+            ttl_seconds=ttl_seconds,
+        )
+
+        self._repo.save_token(
+            jti=jti,
+            fin=fin,
+            kyc_level=kyc_level.value,
+            scopes=scopes,
+            issued_at=datetime.now(tz=timezone.utc),
+            expires_at=expires_at,
+        )
+
+        logger.info(
+            "Delegated consent token issued",
+            extra={"jti": jti, "consent_method": consent_method, "ttl": ttl_seconds},
+        )
+        return token
 
     def verify_consent_token(self, consent_token: str) -> bool:
         """

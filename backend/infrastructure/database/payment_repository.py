@@ -1,10 +1,10 @@
 """
-SQLite Repository — Payment, Token & Webhook Persistence
+Payment, Token & Webhook Persistence
 =========================================================
 Layer: 🔴 LAYER 3 — Infrastructure / Database
 Rule: ONLY layer allowed to touch the database.
 
-Single SQLiteRepository class providing:
+Provides:
   - Full CRUD for Payment domain objects (serialise ↔ ORM model)
   - Consent token issuance tracking & revocation
   - Webhook event audit log
@@ -20,16 +20,16 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Generator
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import or_
+from sqlalchemy.orm import Session
 
-from backend.config import settings
 from backend.domain.models.payment import (
     Payment,
     PaymentInitiateRequest,
     PaymentRail,
     PaymentStatus,
 )
+from backend.infrastructure.database.session import RepositoryBase
 from backend.infrastructure.database.models import (
     Base,
     ConsentTokenRecord,
@@ -38,37 +38,17 @@ from backend.infrastructure.database.models import (
 )
 
 
-class SQLiteRepository:
+class PaymentRepository(RepositoryBase):
     """
-    SQLite-backed repository for all persistent gateway state.
+    Repository for payment, consent-token, and webhook state.
 
     Instantiated once in main.py and injected wherever persistence is needed.
     Uses SQLAlchemy Core session management with explicit commit/rollback.
     """
 
-    def __init__(self, db_url: str = settings.DATABASE_URL) -> None:
-        self._engine = create_engine(
-            db_url,
-            connect_args={"check_same_thread": False},  # Required for SQLite + threading
-            echo=settings.DEBUG,
-        )
-        Base.metadata.create_all(self._engine)
-        self._session_factory = sessionmaker(bind=self._engine, autoflush=False)
 
     # ── Session Context Manager ────────────────────────────────────────────────
 
-    @contextmanager
-    def _session(self) -> Generator[Session, None, None]:
-        """Provide a transactional scope. Commits on success, rolls back on error."""
-        session = self._session_factory()
-        try:
-            yield session
-            session.commit()
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
 
     # ══════════════════════════════════════════════════════════════════════════
     # Payment CRUD
@@ -94,7 +74,7 @@ class SQLiteRepository:
             currency=req.currency,
             end_to_end_id=req.end_to_end_id,
             remittance_info=req.remittance_info,
-            created_at=payment.created_at.replace(tzinfo=None),  # SQLite stores naive datetimes
+            created_at=payment.created_at.replace(tzinfo=None),  # stored naive-UTC; see session.py
             updated_at=payment.updated_at.replace(tzinfo=None),
         )
         with self._session() as session:
@@ -106,9 +86,72 @@ class SQLiteRepository:
             record = session.get(PaymentRecord, payment_id)
             return self._record_to_domain(record) if record else None
 
+    def get_payment_by_end_to_end_id(self, end_to_end_id: str) -> Payment | None:
+        """
+        Retrieve a payment by its caller-supplied reference.
+
+        Backs idempotency. The column is unique, so a duplicate submission is
+        eventually rejected by the database — but only at INSERT, which happens
+        after the payment has already been submitted to the bank. Checking here
+        first is what makes a retry safe rather than merely unrecordable.
+
+        Args:
+            end_to_end_id: The reference to look up.
+
+        Returns:
+            The existing payment, or None if this reference is new.
+        """
+        with self._session() as session:
+            record = (
+                session.query(PaymentRecord)
+                .filter(PaymentRecord.end_to_end_id == end_to_end_id)
+                .first()
+            )
+            return self._record_to_domain(record) if record else None
+
     def update_payment(self, payment: Payment) -> None:
         """Alias of save_payment for semantic clarity at the call site."""
         self.save_payment(payment)
+
+    def list_payments_for_accounts(
+        self,
+        account_numbers: list[str],
+        limit: int = 50,
+    ) -> list[Payment]:
+        """
+        Payments where any of the given accounts was the debtor or creditor.
+
+        Backs the Super App transaction history. Matching on account number
+        rather than username because a payment records accounts, not handles —
+        a user's history is the union of activity across the accounts they
+        have linked.
+
+        Args:
+            account_numbers: The user's linked account numbers.
+            limit:           Maximum payments to return, newest first.
+
+        Returns:
+            Matching payments, newest first. Empty when the list is empty —
+            deliberately not "all payments", which would leak every user's
+            history to anyone with no linked accounts.
+        """
+        if not account_numbers:
+            return []
+
+        with self._session() as session:
+            records = (
+                session.query(PaymentRecord)
+                .filter(
+                    or_(
+                        PaymentRecord.debtor_account_number.in_(account_numbers),
+                        PaymentRecord.creditor_account_number.in_(account_numbers),
+                    )
+                )
+                .order_by(PaymentRecord.created_at.desc())
+                .limit(limit)
+                .all()
+            )
+            return [self._record_to_domain(r) for r in records]
 
     def load_all_payments(self) -> dict[str, Payment]:
         """

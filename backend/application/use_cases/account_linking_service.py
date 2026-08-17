@@ -113,8 +113,27 @@ class AccountLinkingService:
                 f"'{account.account_name}', which does not match your Fayda National ID identity '{user.full_name}'."
             )
 
-        # Check if this is the user's first linked account
         existing_links = self._link_repo.list_for_user(full_username)
+
+        # Refuse a duplicate link for the same account.
+        #
+        # Nothing used to stop this, and the consequences were not cosmetic:
+        #   * the aggregated balance sums every linked account, so a duplicate
+        #     double-counted the money and showed the user a balance they do
+        #     not have;
+        #   * default resolution returns the first matching row, so two rows for
+        #     one account could carry conflicting default flags and make the
+        #     sending or receiving account ambiguous.
+        if any(
+            link.bank_id == bank_id and link.account_number == account_number
+            for link in existing_links
+        ):
+            raise AccountAlreadyLinkedError(
+                f"Account '{account_number}' at {bank_id.value} is already linked "
+                f"to this profile."
+            )
+
+        # Check if this is the user's first linked account
         is_first = len(existing_links) == 0
 
         link = LinkedAccount(
@@ -275,6 +294,10 @@ class AccountVerificationError(AccountLinkingError):
 
 class AccountOwnerMismatchError(AccountLinkingError):
     """Raised when the bank account owner does not match the user's Fayda identity."""
+
+class AccountAlreadyLinkedError(AccountLinkingError):
+    """Raised when a bank account is already linked to the same profile."""
+
 
 class LinkNotFoundError(AccountLinkingError):
     """Raised when a linked account ID doesn't exist."""

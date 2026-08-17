@@ -18,6 +18,7 @@ Strictly validates the full gateway lifecycle across all layers:
  14. Session Revocation (Logout) & Post-Logout Access Guard
 """
 
+import os
 import sys
 import json
 import urllib.request
@@ -522,7 +523,49 @@ check("Revoked session token rejected (401)", isinstance(r, dict) and r.get("_st
 
 # ── 15. Admin Web Portal Integration Tests ──
 print("\n── 15. Admin Web Portal Integration Tests ──")
-admin_token = "dev-admin-token"
+
+# The Admin API has no unauthenticated path and no hardcoded token. This
+# section previously used the literal string "dev-admin-token", which the
+# server accepted; it now authenticates properly like the portal does.
+#
+# Credentials come from the same env vars that seed the first operator, so a
+# fresh database and a CI run agree on them.
+ADMIN_EMAIL = os.getenv("ADMIN_BOOTSTRAP_EMAIL", "admin@kifiya.com")
+ADMIN_PASSWORD = os.getenv("ADMIN_BOOTSTRAP_PASSWORD", "ChangeMe!Dev123")
+
+# No credentials at all must be refused — this is the regression guard for the
+# unauthenticated-admin hole.
+r = req("GET", "/v1/admin/dashboard/stats")
+check(
+    "Admin API rejects unauthenticated request (401)",
+    isinstance(r, dict) and r.get("_status") == 401,
+    str(r),
+)
+
+r = req("GET", "/v1/admin/dashboard/stats", token="dev-admin-token")
+check(
+    "Retired 'dev-admin-token' rejected (401)",
+    isinstance(r, dict) and r.get("_status") == 401,
+    str(r),
+)
+
+r = req(
+    "POST",
+    "/v1/admin/auth/login",
+    body={"email": ADMIN_EMAIL, "password": "definitely-not-the-password"},
+)
+check(
+    "Admin login with wrong password rejected (401)",
+    isinstance(r, dict) and r.get("_status") == 401,
+    str(r),
+)
+
+r = req("POST", "/v1/admin/auth/login", body={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD})
+check("Admin login succeeded", "access_token" in r, str(r))
+admin_token = r.get("access_token", "")
+
+r = req("GET", "/v1/admin/auth/me", token=admin_token)
+check("Admin profile returned", r.get("email") == ADMIN_EMAIL, str(r))
 
 # Dashboard Stats & Activity
 r = req("GET", "/v1/admin/dashboard/stats", token=admin_token)

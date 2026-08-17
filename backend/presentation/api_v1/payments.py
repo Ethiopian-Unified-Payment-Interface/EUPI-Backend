@@ -2,7 +2,7 @@
 Presentation Layer: Payment Routes — POST /v1/payments/*
 Layer: 🔵 LAYER 4 — Driving Adapters (Presentation)
 
-Payments are persisted to SQLite via SQLiteRepository. An in-memory dict
+Payments are persisted to SQLite via PaymentRepository. An in-memory dict
 serves as a fast lookup cache; SQLite is the source of truth and restores
 the cache on server restart (via main.py lifespan).
 """

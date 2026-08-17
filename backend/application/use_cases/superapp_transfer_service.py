@@ -16,6 +16,13 @@ from __future__ import annotations
 import logging
 import uuid
 from decimal import Decimal
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from backend.application.ports.identity_port import IdentityPort
+    from backend.application.use_cases.user_registration_service import (
+        UserRegistrationService,
+    )
 
 # Domain imports only
 from backend.domain.models.linked_account import LinkedAccount
@@ -46,15 +53,125 @@ class SuperAppTransferService:
       - pis_service: PISService for payment execution.
     """
 
+    # Consent minted for a transfer authorises exactly that transfer. Two
+    # minutes is enough to complete initiate → verify → order in one request
+    # and far too short to be reused later if it somehow escaped the process.
+    _CONSENT_TTL_SECONDS = 120
+
     def __init__(
         self,
         user_repo: UserRepositoryPort,
         link_repo: AccountLinkRepositoryPort,
         pis_service: PISService,
+        identity_port: "IdentityPort | None" = None,
+        registration_service: "UserRegistrationService | None" = None,
     ) -> None:
+        """
+        Args:
+            user_repo:            Username resolution.
+            link_repo:            Default account lookup.
+            pis_service:          Payment execution.
+            identity_port:        Mints the consent token derived from a PIN
+                                  authorisation. Required by `send_money`.
+            registration_service: Verifies the transaction PIN, reusing the
+                                  same argon2 hash and lockout counters as
+                                  login. Required by `send_money`.
+        """
         self._user_repo = user_repo
         self._link_repo = link_repo
         self._pis_service = pis_service
+        self._identity_port = identity_port
+        self._registration_service = registration_service
+
+    def send_money(
+        self,
+        sender_username: str,
+        recipient_username: str,
+        amount: Decimal,
+        pin: str,
+        currency: str = "ETB",
+        remittance_info: str | None = None,
+        client_reference: str | None = None,
+    ) -> Payment:
+        """
+        Authorise and execute a P2P transfer in one call.
+
+        The Super App transaction PIN is the payer's consent. Verifying it mints
+        a short-lived consent token, which then drives the ordinary PIS flow —
+        initiate → verify → order — so the payment is fully submitted to the
+        bank when this returns, rather than left PENDING for a caller that has
+        no way to authorise it.
+
+        Why this exists: PIS VERIFY requires a `gateway_access` token, and a
+        Super App session token is deliberately not interchangeable with one.
+        Without this path the app could create a payment and never complete it.
+
+        Args:
+            sender_username:    The payer, from their session.
+            recipient_username: The payee's handle.
+            amount:             Transfer amount.
+            pin:                The payer's 6-digit PIN, re-entered to authorise
+                                this transfer.
+            currency:           Currency code.
+            remittance_info:    Optional narration.
+            client_reference:   Optional caller-supplied idempotency key. When
+                                given, the payment reference is derived from it,
+                                so a double-submitted transfer is rejected by
+                                the unique constraint instead of sending twice.
+
+        Returns:
+            The Payment in ORDERED status, awaiting the bank's callback.
+
+        Raises:
+            InvalidPINError / PINLockedError: PIN wrong, or too many attempts.
+            RecipientNotFoundError, NoDefaultAccountError, SelfTransferError,
+            InsufficientBalanceError: As for `initiate_transfer`.
+        """
+        if self._identity_port is None or self._registration_service is None:
+            raise TransferError(
+                "PIN-authorised transfers are unavailable: the transfer service "
+                "was constructed without an identity port or registration service."
+            )
+
+        # 1. Authorise. Raises before anything is created if the PIN is wrong,
+        #    and is throttled by the same lockout as login.
+        payer = self._registration_service.authorise_with_pin(sender_username, pin)
+
+        # 2. Build the payment. Resolution of both defaults happens here.
+        payment = self.initiate_transfer(
+            sender_username=sender_username,
+            recipient_username=recipient_username,
+            amount=amount,
+            currency=currency,
+            remittance_info=remittance_info,
+            client_reference=client_reference,
+        )
+
+        # 3. Mint consent from the PIN authorisation, tagged so an auditor can
+        #    tell this apart from an OTP-authorised payment.
+        from backend.domain.models.identity import KYCLevel
+
+        consent_token = self._identity_port.issue_delegated_consent_token(
+            fin=payer.fin,
+            scopes=["payments:write"],
+            kyc_level=KYCLevel.STANDARD,
+            consent_method="superapp_pin",
+            ttl_seconds=self._CONSENT_TTL_SECONDS,
+        )
+
+        # 4. Run the rest of the PIS lifecycle.
+        verified = self._pis_service.verify_payment(payment, consent_token)
+        ordered = self._pis_service.order_payment(verified)
+
+        logger.info(
+            "P2P transfer authorised by PIN and submitted",
+            extra={
+                "payment_id": ordered.payment_id,
+                "consent_method": "superapp_pin",
+                "status": ordered.status.value,
+            },
+        )
+        return ordered
 
     def initiate_transfer(
         self,
@@ -63,6 +180,7 @@ class SuperAppTransferService:
         amount: Decimal,
         currency: str = "ETB",
         remittance_info: str | None = None,
+        client_reference: str | None = None,
     ) -> Payment:
         """
         Initiate a P2P transfer from sender to recipient.
@@ -138,10 +256,20 @@ class SuperAppTransferService:
             creditor_name=recipient.full_name,
             amount=amount,
             currency=currency,
-            # A UUID suffix keeps this unique per attempt — the DB enforces
-            # end_to_end_id uniqueness, so two identical repeat transfers
-            # (same sender, recipient, amount) must not collide.
-            end_to_end_id=f"P2P-{uuid.uuid4().hex[:12].upper()}-{sender_username}-{recipient.username}",
+            # Without a client reference a UUID suffix keeps each attempt
+            # unique, since the DB enforces end_to_end_id uniqueness and two
+            # deliberate repeat transfers must not collide.
+            #
+            # With one, the reference is derived from it instead, so a
+            # double-submitted transfer — a retried request, a double-tapped
+            # button — is rejected by that same unique constraint rather than
+            # sending the money twice. That matters more now that a single call
+            # completes the whole transfer.
+            end_to_end_id=(
+                f"P2P-REF-{client_reference}"
+                if client_reference
+                else f"P2P-{uuid.uuid4().hex[:12].upper()}-{sender_username}-{recipient.username}"
+            ),
             remittance_info=remittance_info,
         )
 

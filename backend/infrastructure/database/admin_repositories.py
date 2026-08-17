@@ -1,5 +1,5 @@
 """
-SQLite Admin Repositories
+Admin Repositories
 Layer: 🔴 LAYER 3 — Infrastructure / Database
 Rule: Concrete implementations of abstract admin port interfaces.
 """
@@ -9,11 +9,11 @@ from __future__ import annotations
 import json
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Generator
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import func
+from sqlalchemy.orm import Session
 
 from backend.application.ports.admin_ports import (
     AdminAnalyticsPort,
@@ -21,7 +21,6 @@ from backend.application.ports.admin_ports import (
     BankConfigRepositoryPort,
     MerchantRepositoryPort,
 )
-from backend.config import settings
 from backend.domain.models.account import BankID
 from backend.domain.models.admin import (
     ActivityItem,
@@ -40,6 +39,7 @@ from backend.domain.models.admin import (
     TransactionStats,
     WebhookLog,
 )
+from backend.infrastructure.database.session import RepositoryBase
 from backend.infrastructure.database.models import (
     AuditLogRecord,
     BankConfigRecord,
@@ -53,30 +53,19 @@ from backend.infrastructure.database.models import (
 )
 
 
-class SQLiteBankConfigRepository(BankConfigRepositoryPort):
-    """SQLite-backed implementation of BankConfigRepositoryPort."""
+class BankConfigRepository(RepositoryBase, BankConfigRepositoryPort):
+    """Relational implementation of BankConfigRepositoryPort."""
 
-    def __init__(self, db_url: str = settings.DATABASE_URL) -> None:
-        self._engine = create_engine(
-            db_url,
-            connect_args={"check_same_thread": False},
-            echo=settings.DEBUG,
-        )
-        Base.metadata.create_all(self._engine)
-        self._session_factory = sessionmaker(bind=self._engine, autoflush=False)
-        self._seed_default_banks()
-
-    @contextmanager
-    def _session(self) -> Generator[Session, None, None]:
-        session = self._session_factory()
-        try:
-            yield session
-            session.commit()
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
+    def __init__(self, db, seed: bool = True) -> None:
+        """
+        Args:
+            db:   The shared :class:`Database`.
+            seed: Install the six default bank rail configs when the table is
+                  empty. Off in tests that assert on an empty rail list.
+        """
+        super().__init__(db)
+        if seed:
+            self._seed_default_banks()
 
     def _seed_default_banks(self) -> None:
         """Seed default 6 commercial bank configs if empty."""
@@ -155,30 +144,19 @@ class SQLiteBankConfigRepository(BankConfigRepositoryPort):
         )
 
 
-class SQLiteMerchantRepository(MerchantRepositoryPort):
-    """SQLite-backed implementation of MerchantRepositoryPort."""
+class MerchantRepository(RepositoryBase, MerchantRepositoryPort):
+    """Relational implementation of MerchantRepositoryPort."""
 
-    def __init__(self, db_url: str = settings.DATABASE_URL) -> None:
-        self._engine = create_engine(
-            db_url,
-            connect_args={"check_same_thread": False},
-            echo=settings.DEBUG,
-        )
-        Base.metadata.create_all(self._engine)
-        self._session_factory = sessionmaker(bind=self._engine, autoflush=False)
-        self._seed_default_merchants()
-
-    @contextmanager
-    def _session(self) -> Generator[Session, None, None]:
-        session = self._session_factory()
-        try:
-            yield session
-            session.commit()
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
+    def __init__(self, db, seed: bool = True) -> None:
+        """
+        Args:
+            db:   The shared :class:`Database`.
+            seed: Install sample merchant and KYB records when the table is
+                  empty. Off in tests that assert on empty registries.
+        """
+        super().__init__(db)
+        if seed:
+            self._seed_default_merchants()
 
     def _seed_default_merchants(self) -> None:
         """Seed default TPP merchant profiles and KYB requests."""
@@ -320,29 +298,10 @@ class SQLiteMerchantRepository(MerchantRepositoryPort):
         return res
 
 
-class SQLiteAuditLogRepository(AuditLogRepositoryPort):
-    """SQLite-backed implementation of AuditLogRepositoryPort."""
+class AuditLogRepository(RepositoryBase, AuditLogRepositoryPort):
+    """Relational implementation of AuditLogRepositoryPort."""
 
-    def __init__(self, db_url: str = settings.DATABASE_URL) -> None:
-        self._engine = create_engine(
-            db_url,
-            connect_args={"check_same_thread": False},
-            echo=settings.DEBUG,
-        )
-        Base.metadata.create_all(self._engine)
-        self._session_factory = sessionmaker(bind=self._engine, autoflush=False)
 
-    @contextmanager
-    def _session(self) -> Generator[Session, None, None]:
-        session = self._session_factory()
-        try:
-            yield session
-            session.commit()
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
 
     def log_action(self, action: str, actor_email: str, ip_address: str, details: str) -> AuditLog:
         now = datetime.now(tz=timezone.utc)
@@ -390,105 +349,262 @@ class SQLiteAuditLogRepository(AuditLogRepositoryPort):
             ], total
 
 
-class SQLiteAdminAnalyticsRepository(AdminAnalyticsPort):
-    """SQLite-backed implementation of AdminAnalyticsPort."""
+class AdminAnalyticsRepository(RepositoryBase, AdminAnalyticsPort):
+    """Relational implementation of AdminAnalyticsPort."""
 
-    def __init__(self, db_url: str = settings.DATABASE_URL) -> None:
-        self._engine = create_engine(
-            db_url,
-            connect_args={"check_same_thread": False},
-            echo=settings.DEBUG,
+
+
+    # ── Analytics helpers ─────────────────────────────────────────────────────
+    #
+    # Every figure below is computed from what is actually in the database.
+    # These methods previously clamped real counts up to marketing numbers
+    # (`max(user_count, 145000)`) and hardcoded whole DTOs, which meant a
+    # database with twelve users reported a hundred and forty-five thousand.
+    # Where a metric genuinely cannot be derived from the current schema it
+    # returns 0.0 and says so in a comment — never an invented value.
+
+    _TERMINAL_STATUSES = ("SUCCESS", "FAILED", "CANCELLED")
+
+    @staticmethod
+    def _percent(numerator: float, denominator: float) -> float:
+        """Percentage, or 0.0 when there is nothing to divide by."""
+        if not denominator:
+            return 0.0
+        return round((numerator / denominator) * 100, 2)
+
+    @staticmethod
+    def _growth_percent(current: int, previous: int) -> float:
+        """
+        Period-over-period growth. 0.0 from a zero baseline rather than
+        infinity, so a first-ever data point does not render as +∞%.
+        """
+        if not previous:
+            return 0.0
+        return round(((current - previous) / previous) * 100, 2)
+
+    def _success_rate(self, session: Session) -> float:
+        """Share of terminal payments that settled successfully."""
+        terminal = (
+            session.query(PaymentRecord)
+            .filter(PaymentRecord.status.in_(self._TERMINAL_STATUSES))
+            .count()
         )
-        Base.metadata.create_all(self._engine)
-        self._session_factory = sessionmaker(bind=self._engine, autoflush=False)
-
-    @contextmanager
-    def _session(self) -> Generator[Session, None, None]:
-        session = self._session_factory()
-        try:
-            yield session
-            session.commit()
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
+        succeeded = (
+            session.query(PaymentRecord).filter(PaymentRecord.status == "SUCCESS").count()
+        )
+        return self._percent(succeeded, terminal)
 
     def get_dashboard_stats(self) -> DashboardStats:
+        now = datetime.now(tz=timezone.utc).replace(tzinfo=None)
+        window_start = now - timedelta(days=30)
+        previous_start = now - timedelta(days=60)
+
         with self._session() as session:
             user_count = session.query(UserRecord).count()
             tx_count = session.query(PaymentRecord).count()
             dev_count = session.query(MerchantRecord).count()
-            rail_count = session.query(BankConfigRecord).filter(BankConfigRecord.status == "ACTIVE").count()
+            rail_count = (
+                session.query(BankConfigRecord)
+                .filter(BankConfigRecord.status == "ACTIVE")
+                .count()
+            )
+
+            users_this_period = (
+                session.query(UserRecord)
+                .filter(UserRecord.created_at >= window_start)
+                .count()
+            )
+            users_prev_period = (
+                session.query(UserRecord)
+                .filter(
+                    UserRecord.created_at >= previous_start,
+                    UserRecord.created_at < window_start,
+                )
+                .count()
+            )
+            tx_this_period = (
+                session.query(PaymentRecord)
+                .filter(PaymentRecord.created_at >= window_start)
+                .count()
+            )
+            tx_prev_period = (
+                session.query(PaymentRecord)
+                .filter(
+                    PaymentRecord.created_at >= previous_start,
+                    PaymentRecord.created_at < window_start,
+                )
+                .count()
+            )
+
+            success_rate = self._success_rate(session)
+
+            prev_terminal = (
+                session.query(PaymentRecord)
+                .filter(
+                    PaymentRecord.status.in_(self._TERMINAL_STATUSES),
+                    PaymentRecord.created_at < window_start,
+                )
+                .count()
+            )
+            prev_success = (
+                session.query(PaymentRecord)
+                .filter(
+                    PaymentRecord.status == "SUCCESS",
+                    PaymentRecord.created_at < window_start,
+                )
+                .count()
+            )
+            prev_success_rate = self._percent(prev_success, prev_terminal)
 
         return DashboardStats(
-            total_users=max(user_count, 145000),
-            total_developers=max(dev_count, 342),
-            active_bank_rails=max(rail_count, 6),
-            total_transactions=max(tx_count, 2840000),
-            api_success_rate=99.4,
+            total_users=user_count,
+            total_developers=dev_count,
+            active_bank_rails=rail_count,
+            total_transactions=tx_count,
+            api_success_rate=success_rate,
             compared_to_previous_period={
-                "total_users_percent": 5.2,
-                "total_transactions_percent": 12.0,
-                "api_success_rate_percent": -0.1,
+                "total_users_percent": self._growth_percent(
+                    users_this_period, users_prev_period
+                ),
+                "total_transactions_percent": self._growth_percent(
+                    tx_this_period, tx_prev_period
+                ),
+                "api_success_rate_percent": round(success_rate - prev_success_rate, 2),
             },
         )
 
     def get_activity_feed(self, limit: int = 20) -> list[ActivityItem]:
-        now = datetime.now(tz=timezone.utc)
-        return [
-            ActivityItem(
-                id="evt_98765",
-                level="info",
-                message="Bank rail added",
-                detail="Admin User added CBE rail configuration",
-                timestamp=now,
-            ),
-            ActivityItem(
-                id="evt_98766",
-                level="warning",
-                message="High latency detected",
-                detail="Wegagen rail response time exceeded 800ms",
-                timestamp=now,
-            ),
-        ]
+        """
+        Recent operator actions, drawn from the audit trail.
+
+        Previously two invented events with a live timestamp, which made a
+        silent system look busy.
+        """
+        with self._session() as session:
+            records = (
+                session.query(AuditLogRecord)
+                .order_by(AuditLogRecord.timestamp.desc())
+                .limit(limit)
+                .all()
+            )
+            return [
+                ActivityItem(
+                    id=r.log_id,
+                    level="warning" if r.action.startswith("PII_") else "info",
+                    message=r.action.replace("_", " ").title(),
+                    detail=r.details,
+                    timestamp=r.timestamp.replace(tzinfo=timezone.utc),
+                )
+                for r in records
+            ]
 
     def get_customer_stats(self) -> CustomerStats:
+        now = datetime.now(tz=timezone.utc).replace(tzinfo=None)
+        start_of_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
         with self._session() as session:
             total_users = session.query(UserRecord).count()
+            new_today = (
+                session.query(UserRecord)
+                .filter(UserRecord.created_at >= start_of_today)
+                .count()
+            )
+            active_users = (
+                session.query(UserRecord).filter(UserRecord.is_active.is_(True)).count()
+            )
+            # A set PIN marks a completed registration; a row without one
+            # started onboarding and stopped before finishing.
+            completed = (
+                session.query(UserRecord).filter(UserRecord.pin_hash.isnot(None)).count()
+            )
+
+        completion_rate = self._percent(completed, total_users)
         return CustomerStats(
-            total_registered=max(total_users, 1240000),
-            new_users_today=2143,
-            active_users=890500,
-            kyc_verification_rate_percent=84.3,
-            onboarding_dropoff_percent=12.1,
+            total_registered=total_users,
+            new_users_today=new_today,
+            active_users=active_users,
+            kyc_verification_rate_percent=completion_rate,
+            onboarding_dropoff_percent=round(100.0 - completion_rate, 2)
+            if total_users
+            else 0.0,
         )
 
     def get_transaction_stats(self) -> TransactionStats:
+        with self._session() as session:
+            volume = (
+                session.query(func.coalesce(func.sum(PaymentRecord.amount), 0))
+                .filter(PaymentRecord.status == "SUCCESS")
+                .scalar()
+            ) or 0
+            succeeded = (
+                session.query(PaymentRecord)
+                .filter(PaymentRecord.status == "SUCCESS")
+                .count()
+            )
+            success_rate = self._success_rate(session)
+            # Super App P2P transfers stamp this prefix; see
+            # SuperAppTransferService. Everything else is API-initiated.
+            p2p_count = (
+                session.query(PaymentRecord)
+                .filter(PaymentRecord.end_to_end_id.like("P2P-%"))
+                .count()
+            )
+            total_count = session.query(PaymentRecord).count()
+
+        p2p_percent = self._percent(p2p_count, total_count)
         return TransactionStats(
-            total_volume_etb=425800000000.00,
-            success_rate_percent=99.1,
-            p2p_transfer_percent=65.0,
-            merchant_payment_percent=35.0,
-            avg_transaction_value_etb=5240.00,
+            total_volume_etb=float(volume),
+            success_rate_percent=success_rate,
+            p2p_transfer_percent=p2p_percent,
+            merchant_payment_percent=round(100.0 - p2p_percent, 2) if total_count else 0.0,
+            avg_transaction_value_etb=round(float(volume) / succeeded, 2)
+            if succeeded
+            else 0.0,
         )
 
     def get_merchant_stats(self) -> MerchantStats:
         with self._session() as session:
             count = session.query(MerchantRecord).count()
+            active = (
+                session.query(MerchantRecord)
+                .filter(MerchantRecord.status == "ACTIVE")
+                .count()
+            )
         return MerchantStats(
-            total_merchants=max(count, 342),
-            active_merchants=310,
-            api_traffic_per_day=2400000,
-            avg_setup_time_days=2.5,
+            total_merchants=count,
+            active_merchants=active,
+            # No per-request usage metering exists yet; it arrives with the
+            # developer platform's rate-limit counters. 0 until then.
+            api_traffic_per_day=0,
+            # Requires KYB submitted→approved timestamps, not currently stored.
+            avg_setup_time_days=0.0,
         )
 
     def get_merchant_txn_stats(self) -> MerchantTxnStats:
+        with self._session() as session:
+            # Merchant-attributed payments are those not originating from the
+            # Super App P2P flow. This becomes an app_id filter once the
+            # developer platform lands and payments carry a calling principal.
+            base = session.query(PaymentRecord).filter(
+                ~PaymentRecord.end_to_end_id.like("P2P-%")
+            )
+            volume = (
+                session.query(func.coalesce(func.sum(PaymentRecord.amount), 0))
+                .filter(
+                    PaymentRecord.status == "SUCCESS",
+                    ~PaymentRecord.end_to_end_id.like("P2P-%"),
+                )
+                .scalar()
+            ) or 0
+            successful = base.filter(PaymentRecord.status == "SUCCESS").count()
+
         return MerchantTxnStats(
-            merchant_volume_etb=145200000000.00,
-            successful_payments=12400000,
-            dispute_rate_percent=0.2,
-            avg_settlement_time_hours=4.0,
+            merchant_volume_etb=float(volume),
+            successful_payments=successful,
+            # No dispute or settlement subsystem yet — both arrive with the
+            # ledger in Phase 1. Reported as zero rather than invented.
+            dispute_rate_percent=0.0,
+            avg_settlement_time_hours=0.0,
         )
 
     def list_customers(self, page: int = 1, limit: int = 50) -> tuple[list[dict], int]:
@@ -502,11 +618,20 @@ class SQLiteAdminAnalyticsRepository(AdminAnalyticsPort):
                 .limit(limit)
                 .all()
             )
+            # This repository deliberately has no decryption capability. It
+            # reads `fin_last4` and never `fin_encrypted`, so an operator
+            # browsing the customer list cannot obtain a full national ID
+            # through this path even if the presentation layer forgot to mask.
+            #
+            # `customer_id` was previously derived from the first six digits of
+            # the plaintext FIN, which leaked most of a national ID into an
+            # identifier that then travelled through logs and URLs. The
+            # username is already unique and carries no such payload.
             items = [
                 {
-                    "customer_id": f"usr_{u.fin[:6]}",
+                    "customer_id": f"usr_{u.username.split('@')[0]}",
                     "username": u.username,
-                    "fin": u.fin,
+                    "fin": f"**********{u.fin_last4}",
                     "full_name": u.full_name,
                     "phone_number": u.phone_number,
                     "state": "ACTIVE" if u.is_active else "INACTIVE",

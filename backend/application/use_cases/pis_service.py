@@ -26,6 +26,14 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # Type-only imports. Kept behind TYPE_CHECKING so the accounting stack
+    # stays an optional collaborator at runtime and there is no import cycle
+    # between use-case modules.
+    from backend.application.use_cases.fee_service import FeeService
+    from backend.application.use_cases.ledger_service import LedgerService
 
 # Domain imports only
 from backend.domain.models.account import BankID
@@ -77,16 +85,25 @@ class PISService:
         bank_ports: dict[BankID, BankPort],
         identity_port: IdentityPort,
         routing_port: RoutingPort,
+        ledger_service: "LedgerService | None" = None,
+        fee_service: "FeeService | None" = None,
     ) -> None:
         """
         Args:
-            bank_ports:    Dictionary mapping BankID → concrete BankPort adapter.
-            identity_port: Concrete IdentityPort adapter (e.g., FaydaAdapter).
-            routing_port:  Concrete RoutingPort adapter (e.g., SmartRouter).
+            bank_ports:     Dictionary mapping BankID → concrete BankPort adapter.
+            identity_port:  Concrete IdentityPort adapter (e.g., FaydaAdapter).
+            routing_port:   Concrete RoutingPort adapter (e.g., SmartRouter).
+            ledger_service: Posts double-entry records for settled payments.
+                            Optional so existing unit tests can construct a
+                            PISService without the accounting stack; when
+                            absent, payments settle without being ledgered.
+            fee_service:    Prices payments. Optional for the same reason.
         """
         self._bank_ports = bank_ports
         self._identity_port = identity_port
         self._routing_port = routing_port
+        self._ledger_service = ledger_service
+        self._fee_service = fee_service
 
     # ------------------------------------------------------------------
     # Step 1 — INITIATE
@@ -377,6 +394,7 @@ class PISService:
                     "bank_reference": payment.bank_order_reference,
                 },
             )
+            self._record_in_ledger(final_payment)
         else:
             final_payment = payment.model_copy(
                 update={
@@ -394,6 +412,76 @@ class PISService:
             )
 
         return final_payment
+
+    # ------------------------------------------------------------------
+    # Ledger integration
+    # ------------------------------------------------------------------
+
+    def _record_in_ledger(self, payment: Payment) -> None:
+        """
+        Price a settled payment and post its double-entry records.
+
+        Called only on the SUCCESS path — a failed payment moved no money and
+        must not appear in the ledger.
+
+        Failures here are logged, not raised. The money has already moved at
+        the bank by this point; refusing the callback would leave the payment
+        stuck in ORDERED while the funds sit settled, which is a worse state
+        than an unledgered success. Posting is idempotent by payment_id, so a
+        replayed callback repairs the gap rather than double-posting.
+
+        Args:
+            payment: The payment in SUCCESS status.
+        """
+        if self._ledger_service is None:
+            return
+
+        request = payment.initiate_request
+
+        try:
+            fee_quote = None
+            if self._fee_service is not None:
+                from backend.domain.models.ledger import TransactionType
+
+                transaction_type = TransactionType.classify(
+                    request.debtor_bank_id, request.creditor_bank_id
+                )
+                # Price against the DEBTOR's bank, not the routed rail.
+                #
+                # Under revenue share the customer's own bank collects the fee
+                # and owes EUPI a share of it, so the receivable belongs to
+                # that bank. `selected_rail` is a routing artifact — which rail
+                # carried the transfer — and using it books the receivable
+                # against a bank that never charged anyone. That produced
+                # COOP->COOP payments accruing revenue against CBE, which the
+                # reconciliation report surfaced as volume and revenue landing
+                # on different banks.
+                #
+                # It also makes pricing correct: a negotiated rate with COOP
+                # should apply to COOP's customers regardless of routing.
+                fee_quote = self._fee_service.quote(
+                    bank_id=request.debtor_bank_id,
+                    transaction_type=transaction_type,
+                    amount=request.amount,
+                    currency=request.currency,
+                )
+
+            self._ledger_service.record_settled_payment(
+                payment_id=payment.payment_id,
+                debtor_bank_id=request.debtor_bank_id,
+                debtor_account_number=request.debtor_account_number,
+                creditor_bank_id=request.creditor_bank_id,
+                creditor_account_number=request.creditor_account_number,
+                amount=request.amount,
+                currency=request.currency,
+                fee_quote=fee_quote,
+            )
+        except Exception:  # noqa: BLE001 — see docstring
+            logger.exception(
+                "Failed to record settled payment in the ledger. The payment "
+                "itself succeeded; replay the callback to post the entries.",
+                extra={"payment_id": payment.payment_id},
+            )
 
     # ------------------------------------------------------------------
     # Cancellation (out-of-band, pre-ORDER)

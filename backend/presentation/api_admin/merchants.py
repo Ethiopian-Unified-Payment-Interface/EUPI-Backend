@@ -18,7 +18,8 @@ from backend.domain.models.admin import (
     MerchantTxnStats,
     WebhookLog,
 )
-from backend.presentation.api_admin.auth_deps import get_current_admin_user
+from backend.domain.models.admin_user import AdminUser
+from backend.presentation.api_admin.auth_deps import get_current_admin_user, require_admin
 
 router = APIRouter(prefix="/developers", tags=["Admin — Developers & Merchants"])
 
@@ -53,7 +54,7 @@ class MerchantTxnItem(BaseModel):
     summary="List Registered Merchants",
 )
 def list_merchants(
-    admin: dict = Depends(get_current_admin_user),
+    admin: AdminUser = Depends(get_current_admin_user),
 ) -> dict[str, list[Merchant]]:
     from backend.main import get_admin_merchant_service
     service = get_admin_merchant_service()
@@ -68,7 +69,7 @@ def list_merchants(
     summary="Get Merchant Stats",
 )
 def get_merchant_stats(
-    admin: dict = Depends(get_current_admin_user),
+    admin: AdminUser = Depends(get_current_admin_user),
 ) -> MerchantStats:
     from backend.main import get_admin_analytics_service
     service = get_admin_analytics_service()
@@ -84,7 +85,7 @@ def get_merchant_stats(
 def list_merchant_transactions(
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=50, ge=1, le=100),
-    admin: dict = Depends(get_current_admin_user),
+    admin: AdminUser = Depends(get_current_admin_user),
 ) -> dict[str, list[MerchantTxnItem]]:
     now = datetime.now(tz=timezone.utc)
     txs = [
@@ -109,7 +110,7 @@ def list_merchant_transactions(
     summary="Get Merchant Transaction Stats",
 )
 def get_merchant_txn_stats(
-    admin: dict = Depends(get_current_admin_user),
+    admin: AdminUser = Depends(get_current_admin_user),
 ) -> MerchantTxnStats:
     from backend.main import get_admin_analytics_service
     service = get_admin_analytics_service()
@@ -123,7 +124,7 @@ def get_merchant_txn_stats(
     summary="List Developer Applications",
 )
 def list_developer_apps(
-    admin: dict = Depends(get_current_admin_user),
+    admin: AdminUser = Depends(get_current_admin_user),
 ) -> dict[str, list[DeveloperApp]]:
     from backend.main import get_admin_merchant_service
     service = get_admin_merchant_service()
@@ -138,7 +139,7 @@ def list_developer_apps(
     summary="List KYB Requests",
 )
 def list_kyb_requests(
-    admin: dict = Depends(get_current_admin_user),
+    admin: AdminUser = Depends(get_current_admin_user),
 ) -> dict[str, list[KYBRequest]]:
     from backend.main import get_admin_merchant_service
     service = get_admin_merchant_service()
@@ -155,7 +156,7 @@ def list_kyb_requests(
 def review_kyb_request(
     kyb_id: str,
     body: ReviewKYBPayload,
-    admin: dict = Depends(get_current_admin_user),
+    admin: AdminUser = Depends(require_admin),
 ) -> ReviewKYBResponse:
     from backend.main import get_admin_merchant_service
     service = get_admin_merchant_service()
@@ -164,7 +165,7 @@ def review_kyb_request(
             kyb_id=kyb_id,
             status=body.status.value,
             note=body.review_note,
-            actor_email=admin.get("email", "admin@kifiya.com"),
+            actor_email=admin.email,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
@@ -184,7 +185,7 @@ def review_kyb_request(
 )
 def list_webhooks(
     limit: int = Query(default=50, ge=1, le=100),
-    admin: dict = Depends(get_current_admin_user),
+    admin: AdminUser = Depends(get_current_admin_user),
 ) -> dict[str, list[WebhookLog]]:
     from backend.main import get_admin_analytics_service
     service = get_admin_analytics_service()

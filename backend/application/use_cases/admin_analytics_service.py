@@ -75,3 +75,32 @@ class AdminAnalyticsService:
     def list_audit_logs(self, limit: int = 50, offset: int = 0) -> tuple[list[AuditLog], int]:
         """Retrieve paginated administrative audit logs."""
         return self._audit_repo.list_logs(limit, offset)
+
+    def record_audit_log(
+        self,
+        action: str,
+        actor_email: str,
+        details: str,
+        ip_address: str = "unknown",
+    ) -> AuditLog:
+        """
+        Write an entry to the administrative audit trail.
+
+        Used for security-relevant reads as well as writes — notably unmasked
+        PII access, which is authorised but must never be untraceable.
+
+        Args:
+            action:      Action code, e.g. "PII_REVEALED".
+            actor_email: Operator who performed the action.
+            details:     Human-readable description of what was accessed.
+            ip_address:  Originating client IP where known.
+
+        Returns:
+            The persisted :class:`~domain.models.admin.AuditLog` entry.
+        """
+        return self._audit_repo.log_action(
+            action=action,
+            actor_email=actor_email,
+            ip_address=ip_address,
+            details=details,
+        )

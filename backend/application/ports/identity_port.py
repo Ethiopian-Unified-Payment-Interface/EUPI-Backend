@@ -83,6 +83,45 @@ class IdentityPort(ABC):
         ...
 
     @abstractmethod
+    def issue_delegated_consent_token(
+        self,
+        fin: str,
+        scopes: list[str],
+        kyc_level: KYCLevel,
+        consent_method: str,
+        ttl_seconds: int,
+    ) -> str:
+        """
+        Issue a consent token for a principal the caller has already authenticated.
+
+        Exists so an authorisation established by some means other than a Fayda
+        OTP — a Super App transaction PIN, say — can produce a consent token
+        that the PIS flow validates exactly like any other. Reusing the normal
+        verification path is the point: the token is a real signed JWT, tracked
+        for revocation, and carries a KYC level, so no second, weaker code path
+        appears inside PISService.
+
+        The caller is vouching that it verified the principal. Anything invoking
+        this must have performed a genuine authorisation check immediately
+        beforehand; holding a session token is not one, because a stolen bearer
+        token would then be enough to move money.
+
+        Args:
+            fin:            Verified Fayda Identification Number of the payer.
+            scopes:         Scopes to grant, e.g. ["payments:write"].
+            kyc_level:      Assurance level to assert on the token.
+            consent_method: How consent was obtained, recorded as a claim so an
+                            auditor can later distinguish a PIN-authorised
+                            payment from an OTP-authorised one.
+            ttl_seconds:    Lifetime. Keep it short — this token exists to
+                            authorise one payment, not to grant standing access.
+
+        Returns:
+            A signed consent token.
+        """
+        ...
+
+    @abstractmethod
     def verify_consent_token(self, consent_token: str) -> bool:
         """
         Validate that a consent_token is authentic, unexpired, and not revoked.

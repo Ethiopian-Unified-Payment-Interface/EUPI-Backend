@@ -18,6 +18,8 @@ ReDoc:       http://localhost:8000/redoc
 
 from __future__ import annotations
 
+import logging
+import os
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -28,6 +30,8 @@ load_dotenv()  # Load .env file before reading settings
 
 from backend.config import settings  # noqa: E402 — must follow load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 # ── Infrastructure: Adapters & Repositories ──────────────────────────────────
 from backend.infrastructure.adapters.banks.coop_cbs import CoopCBSAdapter
 from backend.infrastructure.adapters.banks.cbe_cbs import CBECBSAdapter
@@ -37,14 +41,27 @@ from backend.infrastructure.adapters.banks.abyssinia_cbs import AbyssiniaCBSAdap
 from backend.infrastructure.adapters.banks.berhan_cbs import BerhanCBSAdapter
 from backend.infrastructure.adapters.identity.fayda import FaydaAdapter
 from backend.infrastructure.adapters.router.smart_router import SmartRouter
-from backend.infrastructure.database.sqlite_repo import SQLiteRepository
-from backend.infrastructure.database.user_repository import SQLiteUserRepository
-from backend.infrastructure.database.account_link_repository import SQLiteAccountLinkRepository
+from backend.infrastructure.auth.password_hasher import Argon2PasswordHasher
+from backend.infrastructure.auth.identity_vault import FernetIdentityVault
+from backend.infrastructure.database.session import Database
+from backend.infrastructure.database.payment_repository import PaymentRepository
+from backend.infrastructure.database.user_repository import UserRepository
+from backend.infrastructure.database.admin_user_repository import AdminUserRepository
+from backend.infrastructure.database.account_link_repository import AccountLinkRepository
+from backend.infrastructure.database.consent_repository import (
+    ConsentRepository,
+    FinVaultRepository,
+    UserAppIdentityRepository,
+)
+from backend.infrastructure.database.ledger_repository import (
+    FeeRuleRepository,
+    LedgerRepository,
+)
 from backend.infrastructure.database.admin_repositories import (
-    SQLiteAdminAnalyticsRepository,
-    SQLiteAuditLogRepository,
-    SQLiteBankConfigRepository,
-    SQLiteMerchantRepository,
+    AdminAnalyticsRepository,
+    AuditLogRepository,
+    BankConfigRepository,
+    MerchantRepository,
 )
 
 # ── Application: Use-Case Orchestrators ───────────────────────────────────────
@@ -53,6 +70,10 @@ from backend.application.use_cases.pis_service import PISService
 from backend.application.use_cases.user_registration_service import UserRegistrationService
 from backend.application.use_cases.account_linking_service import AccountLinkingService
 from backend.application.use_cases.superapp_transfer_service import SuperAppTransferService
+from backend.application.use_cases.admin_auth_service import AdminAuthService
+from backend.application.use_cases.consent_service import ConsentService
+from backend.application.use_cases.fee_service import FeeService
+from backend.application.use_cases.ledger_service import LedgerService
 from backend.application.use_cases.admin_bank_service import AdminBankService
 from backend.application.use_cases.admin_merchant_service import AdminMerchantService
 from backend.application.use_cases.admin_analytics_service import AdminAnalyticsService
@@ -62,20 +83,41 @@ from backend.domain.models.account import BankID
 
 # ── Presentation: API Routers ─────────────────────────────────────────────────
 from backend.presentation.api_v1 import accounts, auth, payments, webhooks
-from backend.presentation.api_superapp import users, linked_accounts, transfers
+from backend.presentation.api_superapp import (
+    users,
+    linked_accounts,
+    transfers,
+    consents,
+    transactions as superapp_transactions,
+)
 from backend.presentation.api_admin import admin_router
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Singleton instances (module-level, created once at startup)
 # ══════════════════════════════════════════════════════════════════════════════
 
-_repo: SQLiteRepository | None = None
-_user_repo: SQLiteUserRepository | None = None
-_account_link_repo: SQLiteAccountLinkRepository | None = None
-_bank_config_repo: SQLiteBankConfigRepository | None = None
-_merchant_repo: SQLiteMerchantRepository | None = None
-_audit_repo: SQLiteAuditLogRepository | None = None
-_analytics_repo: SQLiteAdminAnalyticsRepository | None = None
+_db: Database | None = None
+
+_repo: PaymentRepository | None = None
+_user_repo: UserRepository | None = None
+_admin_user_repo: AdminUserRepository | None = None
+_account_link_repo: AccountLinkRepository | None = None
+_bank_config_repo: BankConfigRepository | None = None
+_merchant_repo: MerchantRepository | None = None
+_audit_repo: AuditLogRepository | None = None
+_analytics_repo: AdminAnalyticsRepository | None = None
+_ledger_repo: LedgerRepository | None = None
+_fee_rule_repo: FeeRuleRepository | None = None
+_app_identity_repo: UserAppIdentityRepository | None = None
+_consent_repo: ConsentRepository | None = None
+_fin_vault_repo: FinVaultRepository | None = None
+
+_password_hasher: Argon2PasswordHasher | None = None
+_identity_vault: FernetIdentityVault | None = None
+
+_ledger_service: LedgerService | None = None
+_fee_service: FeeService | None = None
+_consent_service: ConsentService | None = None
 
 _ais_service: AISService | None = None
 _pis_service: PISService | None = None
@@ -83,6 +125,7 @@ _identity_port: FaydaAdapter | None = None
 _user_registration_service: UserRegistrationService | None = None
 _account_linking_service: AccountLinkingService | None = None
 _superapp_transfer_service: SuperAppTransferService | None = None
+_admin_auth_service: AdminAuthService | None = None
 _admin_bank_service: AdminBankService | None = None
 _admin_merchant_service: AdminMerchantService | None = None
 _admin_analytics_service: AdminAnalyticsService | None = None
@@ -90,14 +133,39 @@ _admin_analytics_service: AdminAnalyticsService | None = None
 
 # ── DI Accessors (imported by presentation routers) ──────────────────────────
 
-def get_repo() -> SQLiteRepository:
+def get_repo() -> PaymentRepository:
     assert _repo is not None, "Repository not initialised. Server not started via lifespan."
     return _repo
 
 
-def get_user_repository() -> SQLiteUserRepository:
+def get_user_repository() -> UserRepository:
     assert _user_repo is not None, "UserRepository not initialised."
     return _user_repo
+
+
+def get_admin_user_repository() -> AdminUserRepository:
+    assert _admin_user_repo is not None, "AdminUserRepository not initialised."
+    return _admin_user_repo
+
+
+def get_admin_auth_service() -> AdminAuthService:
+    assert _admin_auth_service is not None, "AdminAuthService not initialised."
+    return _admin_auth_service
+
+
+def get_ledger_service() -> LedgerService:
+    assert _ledger_service is not None, "LedgerService not initialised."
+    return _ledger_service
+
+
+def get_fee_service() -> FeeService:
+    assert _fee_service is not None, "FeeService not initialised."
+    return _fee_service
+
+
+def get_consent_service() -> ConsentService:
+    assert _consent_service is not None, "ConsentService not initialised."
+    return _consent_service
 
 
 def get_ais_service() -> AISService:
@@ -146,26 +214,94 @@ def get_admin_analytics_service() -> AdminAnalyticsService:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Admin Bootstrap
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _bootstrap_admin(auth_service: AdminAuthService) -> None:
+    """
+    Ensure a first admin operator exists so the Admin Portal is reachable.
+
+    There is deliberately no unauthenticated path into the Admin API, so
+    without a seeded operator the portal would be permanently locked out.
+    Runs only when the operator table is empty.
+
+    Credentials come from ADMIN_BOOTSTRAP_EMAIL / ADMIN_BOOTSTRAP_PASSWORD.
+    In DEBUG a development default is used and loudly announced; outside DEBUG
+    the variables are required and startup logs a clear error if absent.
+    """
+    email = os.getenv("ADMIN_BOOTSTRAP_EMAIL", "").strip()
+    password = os.getenv("ADMIN_BOOTSTRAP_PASSWORD", "")
+
+    if not email or not password:
+        if not settings.DEBUG:
+            logger.error(
+                "No admin operator exists and ADMIN_BOOTSTRAP_EMAIL / "
+                "ADMIN_BOOTSTRAP_PASSWORD are unset. The Admin Portal is "
+                "unreachable until an operator is created."
+            )
+            return
+        email = email or "admin@kifiya.com"
+        password = password or "ChangeMe!Dev123"
+
+    created = auth_service.bootstrap_first_admin(email=email, password=password)
+    if created is None:
+        return
+
+    if settings.DEBUG:
+        logger.warning(
+            "Seeded development admin %s with a well-known password. "
+            "Set ADMIN_BOOTSTRAP_EMAIL / ADMIN_BOOTSTRAP_PASSWORD before any "
+            "shared deployment.",
+            created.email,
+        )
+    else:
+        logger.info("Seeded initial admin operator %s.", created.email)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # FastAPI Lifespan — Boot & Shutdown
 # ══════════════════════════════════════════════════════════════════════════════
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Wire the full DI graph and restore DB state on startup."""
-    global _repo, _user_repo, _account_link_repo
+    global _db
+    global _repo, _user_repo, _admin_user_repo, _account_link_repo
     global _bank_config_repo, _merchant_repo, _audit_repo, _analytics_repo
+    global _ledger_repo, _fee_rule_repo
+    global _app_identity_repo, _consent_repo, _fin_vault_repo, _identity_vault
+    global _consent_service
+    global _password_hasher
+    global _ledger_service, _fee_service
     global _ais_service, _pis_service, _identity_port
     global _user_registration_service, _account_linking_service, _superapp_transfer_service
-    global _admin_bank_service, _admin_merchant_service, _admin_analytics_service
+    global _admin_auth_service, _admin_bank_service, _admin_merchant_service, _admin_analytics_service
 
-    # 1. Databases & Repositories
-    _repo = SQLiteRepository(db_url=settings.DATABASE_URL)
-    _user_repo = SQLiteUserRepository(db_url=settings.DATABASE_URL)
-    _account_link_repo = SQLiteAccountLinkRepository(db_url=settings.DATABASE_URL)
-    _bank_config_repo = SQLiteBankConfigRepository(db_url=settings.DATABASE_URL)
-    _merchant_repo = SQLiteMerchantRepository(db_url=settings.DATABASE_URL)
-    _audit_repo = SQLiteAuditLogRepository(db_url=settings.DATABASE_URL)
-    _analytics_repo = SQLiteAdminAnalyticsRepository(db_url=settings.DATABASE_URL)
+    # 0. Shared security primitives
+    # Security primitives first: UserRepository needs the vault to encrypt
+    # the national ID before it can persist a single user.
+    _password_hasher = Argon2PasswordHasher()
+    _identity_vault = FernetIdentityVault()
+
+    # 1. One engine, one pool, one schema bootstrap — shared by every
+    #    repository below. Previously each of these built its own engine.
+    _db = Database(url=settings.DATABASE_URL, echo=False)
+    _db.create_all()
+
+    # Repositories — all sharing the single Database above.
+    _repo = PaymentRepository(_db)
+    _user_repo = UserRepository(_db, _identity_vault)
+    _admin_user_repo = AdminUserRepository(_db)
+    _account_link_repo = AccountLinkRepository(_db)
+    _bank_config_repo = BankConfigRepository(_db)
+    _merchant_repo = MerchantRepository(_db)
+    _audit_repo = AuditLogRepository(_db)
+    _analytics_repo = AdminAnalyticsRepository(_db)
+    _ledger_repo = LedgerRepository(_db)
+    _fee_rule_repo = FeeRuleRepository(_db)
+    _app_identity_repo = UserAppIdentityRepository(_db)
+    _consent_repo = ConsentRepository(_db)
+    _fin_vault_repo = FinVaultRepository(_db)
 
     # 2. Concrete bank adapters
     bank_ports = {
@@ -185,16 +321,34 @@ async def lifespan(app: FastAPI):
     for bank_id in bank_ports:
         router.register_rail(bank_id)
 
-    # 5. Use-case orchestrators (pure DI — no framework magic)
+    # 5. Accounting stack — must exist before PISService, which posts to it.
+    _ledger_service = LedgerService(ledger_repo=_ledger_repo)
+    _fee_service = FeeService(fee_rule_repo=_fee_rule_repo)
+    _fee_service.seed_defaults_if_empty()
+    _consent_service = ConsentService(
+        identity_repo=_app_identity_repo,
+        consent_repo=_consent_repo,
+        vault_repo=_fin_vault_repo,
+        vault=_identity_vault,
+        user_repo=_user_repo,
+    )
+
+    # 6. Use-case orchestrators (pure DI — no framework magic)
     _ais_service = AISService(bank_ports=bank_ports, identity_port=_identity_port)
     _pis_service = PISService(
         bank_ports=bank_ports,
         identity_port=_identity_port,
         routing_port=router,
+        ledger_service=_ledger_service,
+        fee_service=_fee_service,
     )
 
-    # 6. Super App services
-    _user_registration_service = UserRegistrationService(user_repo=_user_repo, identity_port=_identity_port)
+    # 7. Super App services
+    _user_registration_service = UserRegistrationService(
+        user_repo=_user_repo,
+        password_hasher=_password_hasher,
+        identity_port=_identity_port,
+    )
     _account_linking_service = AccountLinkingService(
         link_repo=_account_link_repo,
         user_repo=_user_repo,
@@ -204,9 +358,19 @@ async def lifespan(app: FastAPI):
         user_repo=_user_repo,
         link_repo=_account_link_repo,
         pis_service=_pis_service,
+        # Both required for PIN-authorised transfers: one verifies the PIN,
+        # the other mints the consent token derived from that verification.
+        identity_port=_identity_port,
+        registration_service=_user_registration_service,
     )
 
-    # 7. Admin Services
+    # 8. Admin Services
+    _admin_auth_service = AdminAuthService(
+        admin_repo=_admin_user_repo,
+        password_hasher=_password_hasher,
+    )
+    _bootstrap_admin(_admin_auth_service)
+
     _admin_bank_service = AdminBankService(
         bank_config_repo=_bank_config_repo,
         audit_repo=_audit_repo,
@@ -221,14 +385,17 @@ async def lifespan(app: FastAPI):
         audit_repo=_audit_repo,
     )
 
-    # 8. Restore in-memory payment cache from SQLite
+    # 9. Restore in-memory payment cache from SQLite
     restored = _repo.load_all_payments()
     payments._payment_store.update(restored)
-    print(f"✅ Gateway started — {len(restored)} payments restored from DB.")
+    # Logging, not print: a bare print of non-ASCII crashes startup outright on
+    # a Windows console (cp1252 cannot encode the check mark this line used to
+    # carry), and startup output belongs in the log stream regardless.
+    logger.info("Gateway started - %d payments restored from DB.", len(restored))
 
     yield  # ← Server is running
 
-    print("Gateway shutting down.")
+    logger.info("Gateway shutting down.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -343,6 +510,8 @@ app.include_router(webhooks.router,        prefix=API_V1_PREFIX)
 app.include_router(users.router,           prefix=API_V1_PREFIX)
 app.include_router(linked_accounts.router, prefix=API_V1_PREFIX)
 app.include_router(transfers.router,       prefix=API_V1_PREFIX)
+app.include_router(consents.router,        prefix=API_V1_PREFIX)
+app.include_router(superapp_transactions.router, prefix=API_V1_PREFIX)
 app.include_router(admin_router)
 
 

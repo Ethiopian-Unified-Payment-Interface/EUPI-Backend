@@ -7,11 +7,26 @@ uvicorn[standard]>=0.29.0
 
 # ── Data validation ────────────────────────────────────────────────────────────
 pydantic>=2.7.0
+# Required by pydantic's EmailStr, used for admin login. Pydantic only raises
+# on it at schema-build time, so a missing install fails at app startup rather
+# than at import — it must be declared explicitly, not inherited from whatever
+# a developer machine happens to have.
+email-validator>=2.1.0
 
 # ── Auth ───────────────────────────────────────────────────────────────────────
 PyJWT>=2.8.0
+# argon2id for PINs, admin passwords, and (from Phase 3) client secrets.
+argon2-cffi>=23.1.0
+# Fernet authenticated encryption for the national-ID vault.
+cryptography>=42.0.0
 
 # ── Database ───────────────────────────────────────────────────────────────────
+# Schema migrations. Base.metadata.create_all() cannot ALTER an existing
+# table, so it silently no-ops on a column addition — which is exactly how
+# a missing migration stays hidden until production.
+alembic>=1.13.0
+# Postgres driver. psycopg 3 with the binary wheel, so no local libpq build.
+psycopg[binary]>=3.1.0
 sqlalchemy>=2.0.0
 
 # ── Configuration ──────────────────────────────────────────────────────────────
