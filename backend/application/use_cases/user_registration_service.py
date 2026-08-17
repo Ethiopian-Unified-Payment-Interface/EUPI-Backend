@@ -18,6 +18,7 @@ import re
 from datetime import datetime, timezone
 
 # Domain imports only
+from backend.application.ports.identity_port import IdentityPort
 from backend.domain.models.user import PublicUserProfile, SuperAppUser
 
 # Application-layer port contracts only — never concrete adapters
@@ -72,6 +73,13 @@ class UserRegistrationService:
         if identity is None:
             raise FaydaIdentityNotFoundError(
                 f"FIN '{fin}' is not registered in the Fayda National Identity System."
+            )
+
+        # Check FIN uniqueness (one account per national ID)
+        existing = self._user_repo.get_by_fin(fin)
+        if existing is not None:
+            raise FINAlreadyRegisteredError(
+                "A super app account already exists for this FIN."
             )
 
         # Verify entered phone number matches the phone number registered to that FIN in Fayda
