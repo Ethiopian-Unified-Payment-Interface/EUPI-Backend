@@ -18,6 +18,7 @@ import re
 from datetime import datetime, timezone
 
 # Domain imports only
+from backend.application.ports.identity_port import IdentityPort
 from backend.domain.models.user import PublicUserProfile, SuperAppUser
 
 # Application-layer port contracts only — never concrete adapters

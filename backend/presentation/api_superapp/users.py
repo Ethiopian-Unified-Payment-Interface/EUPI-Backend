@@ -417,3 +417,24 @@ def get_public_profile(username: str) -> PublicUserProfileResponse:
         username=profile.username,
         full_name=profile.full_name,
     )
+
+
+@router.get(
+    "/me",
+    response_model=SuperAppUserResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get Authenticated User Profile",
+    description="Returns full profile metadata for the authenticated session user.",
+)
+def get_current_user_profile(
+    current_user: SuperAppUser = Depends(get_current_superapp_user),
+) -> SuperAppUserResponse:
+    return SuperAppUserResponse(
+        username=current_user.username,
+        fin=current_user.fin,
+        full_name=current_user.full_name,
+        phone_number=current_user.phone_number,
+        created_at=current_user.created_at,
+        is_active=current_user.is_active,
+    )
+
