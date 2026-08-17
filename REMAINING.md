@@ -22,6 +22,39 @@ score can never favour them. A third of the rails are silently disabled.
 
 *Fix: add both to each map. Hours.*
 
+### The terminal payment status is never persisted
+
+**Confirmed against the running stack**, not inferred. `receive_bank_callback` in
+[`api_v1/webhooks.py`](backend/presentation/api_v1/webhooks.py) drives a payment to
+SUCCESS or FAILED and writes the result to `_payment_store` only — it never calls
+`repo.update_payment`. Every other transition does:
+
+| Step | Persists |
+| --- | --- |
+| initiate | `repo.save_payment` |
+| verify | `repo.update_payment` |
+| order | `repo.update_payment` |
+| **callback → SUCCESS/FAILED** | **in-memory only** |
+
+Two consequences, both live today:
+
+- **Two endpoints disagree right now.** For `PAY-B0DFDBDC96E141D5`, settled via
+  the callback: `GET /payments/{id}` reports `SUCCESS` (from the cache) while
+  `GET /superapp/transactions` reports `ORDERED` (from the database). Same
+  process, same payment, two answers.
+- **Settlement is lost on restart.** [`main.py`](backend/main.py) rehydrates
+  `_payment_store` from the database at boot, so every settled payment comes back
+  as `ORDERED` — while its ledger entries remain posted. The ledger says settled,
+  the payment says in flight, and reconciliation against a bank statement would
+  flag every one of them.
+
+This is worse than the per-process cache issue below, because it corrupts durable
+state rather than only blocking scale-out.
+
+*Fix: `repo.update_payment(final_payment)` in the callback handler, alongside the
+cache write. One line, plus a test that asserts the status survives a repository
+round-trip.*
+
 ### The payment cache is per-process
 
 `_payment_store` in [`api_v1/payments.py`](backend/presentation/api_v1/payments.py)
