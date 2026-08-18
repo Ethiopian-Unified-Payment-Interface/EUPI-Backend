@@ -145,6 +145,64 @@ class SQLiteRepository:
             updated_at=record.updated_at.replace(tzinfo=timezone.utc),
         )
 
+    def get_payments_for_user(
+        self,
+        account_numbers: list[str],
+        limit: int = 20,
+    ) -> list[dict]:
+        """
+        Return recent payments where the user's linked accounts appear as debtor or creditor.
+
+        Designed for GET /v1/superapp/transactions.  Queries the payments table
+        directly — no bank CBS calls, no re-authentication required.  The caller
+        supplies every account number the session user has linked; this method
+        returns all payments that touched any of them.
+
+        is_credit is True when the creditor_account_number belongs to the user
+        (money arrived), False when the debtor_account_number belongs to the user
+        (money left).  When both sides are the same user this will render as a
+        credit, which is the safer default for a self-transfer edge case.
+
+        Returns a list of plain dicts shaped for the SuperApp dashboard — not
+        full Payment domain objects, since this is a read-only projection.
+        """
+        if not account_numbers:
+            return []
+
+        with self._session() as session:
+            from sqlalchemy import or_
+            acct_set = set(account_numbers)
+            records = (
+                session.query(PaymentRecord)
+                .filter(
+                    or_(
+                        PaymentRecord.debtor_account_number.in_(acct_set),
+                        PaymentRecord.creditor_account_number.in_(acct_set),
+                    )
+                )
+                .order_by(PaymentRecord.created_at.desc())
+                .limit(limit)
+                .all()
+            )
+
+            result = []
+            for r in records:
+                is_credit = r.creditor_account_number in acct_set
+                result.append({
+                    "payment_id": r.payment_id,
+                    "amount": str(r.amount),
+                    "currency": r.currency,
+                    "status": r.status,
+                    "is_credit": is_credit,
+                    "counterparty_name": r.creditor_name if not is_credit else None,
+                    "counterparty_bank": (
+                        r.creditor_bank_id if not is_credit else r.debtor_bank_id
+                    ),
+                    "remittance_info": r.remittance_info,
+                    "created_at": r.created_at.isoformat() + "Z",
+                })
+            return result
+
     # ══════════════════════════════════════════════════════════════════════════
     # Consent Token Management
     # ══════════════════════════════════════════════════════════════════════════
