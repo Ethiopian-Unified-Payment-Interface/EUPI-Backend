@@ -69,11 +69,17 @@ class ConsentScope(str, Enum):
     """
 
     # ── Money ─────────────────────────────────────────────────────────────────
+    ACCOUNTS_READ = "accounts:read"
+    """See account balances across linked bank accounts."""
+
     TRANSACTIONS_READ_OWN = "transactions:read:own"
     """Transactions this application itself initiated. Never another app's."""
 
     PAYMENTS_INITIATE = "payments:initiate"
     """Initiate payments on the user's behalf."""
+
+    PAYMENTS_READ_OWN = "payments:read:own"
+    """Read the status of payments initiated by this app."""
 
     # ── Platform ──────────────────────────────────────────────────────────────
     WEBHOOKS_RECEIVE = "webhooks:receive"
@@ -90,15 +96,24 @@ class ConsentScope(str, Enum):
         return self is ConsentScope.IDENTITY_READ_FIN
 
     @property
+    def is_app_level(self) -> bool:
+        """
+        Whether an app-only token (client_credentials) may carry this scope.
+
+        App-level scopes touch the application's own records or its integration
+        mechanics. Everything touching a user requires a delegated token (tpp_user_access).
+        """
+        return self in (ConsentScope.PAYMENTS_READ_OWN, ConsentScope.WEBHOOKS_RECEIVE)
+
+    @property
     def requires_user_consent(self) -> bool:
         """
         Whether a user must personally approve this scope.
 
         Scopes touching personal data always require it. Platform mechanics
-        such as webhook delivery are a property of the app's own integration
-        and carry no user data, so they do not.
+        such as webhook delivery or reading the app's own payments do not.
         """
-        return self not in (ConsentScope.WEBHOOKS_RECEIVE,)
+        return self not in (ConsentScope.WEBHOOKS_RECEIVE, ConsentScope.PAYMENTS_READ_OWN)
 
     @property
     def description(self) -> str:
@@ -114,10 +129,12 @@ class ConsentScope(str, Enum):
                 "See your Fayda national ID number. Only licensed providers with "
                 "their own legal obligation to verify identity may request this."
             ),
+            ConsentScope.ACCOUNTS_READ: "See your account balances across linked banks.",
             ConsentScope.TRANSACTIONS_READ_OWN: (
                 "See the transactions you make through this app."
             ),
             ConsentScope.PAYMENTS_INITIATE: "Start payments from your account.",
+            ConsentScope.PAYMENTS_READ_OWN: "Read status of payments initiated by this app.",
             ConsentScope.WEBHOOKS_RECEIVE: "Receive payment status updates.",
         }[self]
 

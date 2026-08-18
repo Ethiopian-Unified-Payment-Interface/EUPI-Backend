@@ -93,7 +93,7 @@ class AISService:
             InsufficientKYCLevelError: If the token's KYC level is below BASIC.
             NoAccountsFoundError:    If no bank rail returns account data.
         """
-        self._validate_consent(consent_token, required_scope="accounts:read")
+        self._validate_consent(consent_token)
 
         # Use the FIN as the stable lookup key so bank adapters always receive
         # the same identifier for a given customer (the JWT string changes on
@@ -147,7 +147,7 @@ class AISService:
             BankNotRegisteredError:   If bank_id has no registered adapter.
             AccountNotFoundException: Propagated from the bank port.
         """
-        self._validate_consent(consent_token, required_scope="accounts:read")
+        self._validate_consent(consent_token)
         port = self._get_port_or_raise(bank_id)
         account = port.get_balance(account_number=account_number)
         logger.info(
@@ -186,7 +186,7 @@ class AISService:
             BankNotRegisteredError:   If bank_id has no registered adapter.
             InvalidDateRangeError:    If from_date is after to_date.
         """
-        self._validate_consent(consent_token, required_scope="transactions:read")
+        self._validate_consent(consent_token)
         port = self._get_port_or_raise(bank_id)
 
         now_utc = datetime.now(tz=timezone.utc)
@@ -237,13 +237,12 @@ class AISService:
     # Private Helpers
     # ------------------------------------------------------------------
 
-    def _validate_consent(self, consent_token: str, required_scope: str) -> None:
+    def _validate_consent(self, consent_token: str) -> None:
         """
-        Validate a consent token and assert it carries the required scope.
+        Validate a consent token and assert its KYC level meets service requirements.
 
         Args:
-            consent_token:  The token to validate.
-            required_scope: OAuth-style scope string (e.g., "accounts:read").
+            consent_token: The token to validate.
 
         Raises:
             ConsentValidationError:    If the token is invalid or expired.

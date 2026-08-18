@@ -85,9 +85,23 @@ def receive_bank_callback(body: BankCallbackBody) -> CallbackAcknowledgement:
     _payment_store[body.payment_id] = final_payment
     repo.update_payment(final_payment)
 
-    # TODO: enqueue async POST to the TPP's webhook_url.
     if final_payment.webhook_url:
-        pass
+        payload = {
+            "event_type": "payment.settled",
+            "payment_id": final_payment.payment_id,
+            "status": final_payment.status.value,
+            "amount": str(final_payment.initiate_request.amount),
+            "currency": final_payment.initiate_request.currency,
+            "end_to_end_id": final_payment.initiate_request.end_to_end_id,
+            "bank_order_reference": final_payment.bank_order_reference,
+            "failure_reason": final_payment.failure_reason,
+            "updated_at": final_payment.updated_at.isoformat(),
+        }
+        repo.create_webhook_event(
+            payment_id=final_payment.payment_id,
+            webhook_url=final_payment.webhook_url,
+            payload=payload,
+        )
 
     return CallbackAcknowledgement(
         payment_id=final_payment.payment_id,

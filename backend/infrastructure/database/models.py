@@ -65,7 +65,7 @@ class PaymentRecord(Base):
     # Callbacks
     webhook_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
-    # ── Initiate Request Fields (denormalised) ────────────────────────────────
+    # Initiate Request Fields (denormalised)
     debtor_account_number: Mapped[str] = mapped_column(String(30), nullable=False)
     debtor_bank_id: Mapped[str] = mapped_column(String(20), nullable=False)
     creditor_account_number: Mapped[str] = mapped_column(String(30), nullable=False)
@@ -73,12 +73,20 @@ class PaymentRecord(Base):
     creditor_name: Mapped[str] = mapped_column(String(100), nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="ETB")
-    end_to_end_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    end_to_end_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     remittance_info: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Multi-tenant Developer Platform Fields
+    app_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    request_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("app_id", "end_to_end_id", name="uq_payment_app_e2e"),
+    )
 
 
 class ConsentTokenRecord(Base):
@@ -109,11 +117,14 @@ class WebhookEventRecord(Base):
 
     event_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     payment_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    app_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    event_type: Mapped[str] = mapped_column(String(64), default="payment.settled", nullable=False)
     webhook_url: Mapped[str] = mapped_column(String(512), nullable=False)
     payload_json: Mapped[str] = mapped_column(Text, nullable=False)     # JSON-encoded payload
     http_status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_attempted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     delivered: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
@@ -334,6 +345,9 @@ class MerchantRecord(Base):
     kyb_status: Mapped[str] = mapped_column(String(20), default="APPROVED", nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="ACTIVE", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    contact_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 
 class DeveloperAppRecord(Base):
@@ -349,6 +363,43 @@ class DeveloperAppRecord(Base):
     allowed_scopes: Mapped[str] = mapped_column(Text, nullable=False)  # JSON list
     status: Mapped[str] = mapped_column(String(20), default="ACTIVE", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    client_secret_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    secret_created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    secret_rotated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    webhook_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    webhook_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
+    redirect_uris: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    rate_limit_per_min: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
+    suspended_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class AuthorizationCodeRecord(Base):
+    """
+    Persisted single-use authorization code for OAuth2 PKCE authorization code grants.
+    """
+    __tablename__ = "authorization_codes"
+
+    code_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    app_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    username: Mapped[str] = mapped_column(String(64), nullable=False)
+    scopes: Mapped[str] = mapped_column(Text, nullable=False)
+    redirect_uri: Mapped[str] = mapped_column(String(512), nullable=False)
+    code_challenge: Mapped[str] = mapped_column(String(128), nullable=False)
+    code_challenge_method: Mapped[str] = mapped_column(String(8), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class RateLimitCounterRecord(Base):
+    """
+    Persisted fixed-window request counters per client.
+    """
+    __tablename__ = "rate_limit_counters"
+
+    client_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    window_start: Mapped[datetime] = mapped_column(DateTime, primary_key=True)
+    request_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
 class KYBRequestRecord(Base):

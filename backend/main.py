@@ -18,6 +18,7 @@ ReDoc:       http://localhost:8000/redoc
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -90,6 +91,7 @@ from backend.presentation.api_superapp import (
     consents,
     transactions as superapp_transactions,
 )
+from backend.presentation.api_oauth import oauth_router
 from backend.presentation.api_admin import admin_router
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -385,17 +387,18 @@ async def lifespan(app: FastAPI):
         audit_repo=_audit_repo,
     )
 
-    # 9. Restore in-memory payment cache from SQLite
-    restored = _repo.load_all_payments()
-    payments._payment_store.update(restored)
-    # Logging, not print: a bare print of non-ASCII crashes startup outright on
-    # a Windows console (cp1252 cannot encode the check mark this line used to
-    # carry), and startup output belongs in the log stream regardless.
-    logger.info("Gateway started - %d payments restored from DB.", len(restored))
+    # 10. Launch background Webhook Delivery Worker
+    from backend.infrastructure.webhooks.delivery_worker import webhook_worker_loop
+    webhook_task = asyncio.create_task(webhook_worker_loop(_db, poll_interval=10.0))
 
     yield  # ← Server is running
 
     logger.info("Gateway shutting down.")
+    webhook_task.cancel()
+    try:
+        await webhook_task
+    except asyncio.CancelledError:
+        pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -512,6 +515,7 @@ app.include_router(linked_accounts.router, prefix=API_V1_PREFIX)
 app.include_router(transfers.router,       prefix=API_V1_PREFIX)
 app.include_router(consents.router,        prefix=API_V1_PREFIX)
 app.include_router(superapp_transactions.router, prefix=API_V1_PREFIX)
+app.include_router(oauth_router.router,    prefix=API_V1_PREFIX)
 app.include_router(admin_router)
 
 

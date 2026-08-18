@@ -49,6 +49,8 @@ TOKEN_TYPE_GATEWAY: Final = "gateway_access"
 TOKEN_TYPE_SUPERAPP: Final = "superapp_session"
 TOKEN_TYPE_REGISTRATION: Final = "registration_verification"
 TOKEN_TYPE_ADMIN: Final = "admin_session"
+TOKEN_TYPE_TPP: Final = "tpp_access"
+TOKEN_TYPE_TPP_USER: Final = "tpp_user_access"
 
 ISSUER: Final = "kifiya-open-gateway"
 
@@ -56,6 +58,7 @@ ISSUER: Final = "kifiya-open-gateway"
 # therefore recoverable from any payment that stored its consent token.
 CONSENT_METHOD_FAYDA_OTP: Final = "fayda_otp"
 CONSENT_METHOD_SUPERAPP_PIN: Final = "superapp_pin"
+CONSENT_METHOD_TPP_AUTH_CODE: Final = "tpp_authorization_code"
 
 
 class TokenTypeError(InvalidTokenError):
@@ -345,3 +348,85 @@ def decode_admin_jwt(token: str) -> dict[str, Any]:
         expected_type=TOKEN_TYPE_ADMIN,
         required_claims=["sub", "jti", "role"],
     )
+
+
+# ── TPP App access tokens (client credentials, no user) ───────────────────────
+
+
+def create_tpp_access_jwt(
+    app_id: str,
+    client_id: str,
+    merchant_id: str | None = None,
+    environment: str = "SANDBOX",
+    scopes: list[str] | None = None,
+    ttl_seconds: int = 3600,
+) -> tuple[str, str, datetime]:
+    """
+    Issue a signed TPP app-level access token (client credentials grant).
+
+    Carries NO psu_id and NO kyc_level so it cannot reach user-scoped routes.
+    """
+    return _issue(
+        {
+            "sub": app_id,
+            "type": TOKEN_TYPE_TPP,
+            "app_id": app_id,
+            "client_id": client_id,
+            "merchant_id": merchant_id,
+            "environment": environment,
+            "scopes": scopes or [],
+        },
+        ttl_seconds,
+    )
+
+
+def decode_tpp_access_jwt(token: str) -> dict[str, Any]:
+    """Decode and verify a TPP app-level access token."""
+    return _decode(
+        token,
+        expected_type=TOKEN_TYPE_TPP,
+        required_claims=["sub", "jti", "app_id", "client_id", "environment", "scopes"],
+    )
+
+
+# ── TPP User delegated access tokens (auth code grant) ───────────────────────
+
+
+def create_tpp_user_access_jwt(
+    psu_id: str,
+    app_id: str,
+    client_id: str,
+    environment: str = "SANDBOX",
+    scopes: list[str] | None = None,
+    kyc_level: str = "STANDARD",
+    ttl_seconds: int = 3600,
+) -> tuple[str, str, datetime]:
+    """
+    Issue a signed TPP user-delegated access token (authorization code grant).
+
+    `sub` is the per-app pseudonym (psu_id), never the username or Fayda FIN.
+    """
+    return _issue(
+        {
+            "sub": psu_id,
+            "type": TOKEN_TYPE_TPP_USER,
+            "psu_id": psu_id,
+            "app_id": app_id,
+            "client_id": client_id,
+            "environment": environment,
+            "scopes": scopes or [],
+            "kyc_level": kyc_level,
+            "consent_method": CONSENT_METHOD_TPP_AUTH_CODE,
+        },
+        ttl_seconds,
+    )
+
+
+def decode_tpp_user_access_jwt(token: str) -> dict[str, Any]:
+    """Decode and verify a TPP user-delegated access token."""
+    return _decode(
+        token,
+        expected_type=TOKEN_TYPE_TPP_USER,
+        required_claims=["sub", "jti", "psu_id", "app_id", "client_id", "environment", "scopes"],
+    )
+

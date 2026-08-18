@@ -191,7 +191,12 @@ class MerchantRepository(RepositoryBase, MerchantRepositoryPort):
                     merchant_name="EthioPay Solutions PLC",
                     client_id="client_ethiopay_99",
                     environment="LIVE",
-                    allowed_scopes=json.dumps(["ais:read", "pis:write"]),
+                    allowed_scopes=json.dumps([
+                        "accounts:read",
+                        "payments:initiate",
+                        "payments:read:own",
+                        "webhooks:receive",
+                    ]),
                     status="ACTIVE",
                     created_at=now,
                 )

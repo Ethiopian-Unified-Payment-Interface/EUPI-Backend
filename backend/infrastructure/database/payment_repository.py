@@ -289,3 +289,42 @@ class PaymentRepository(RepositoryBase):
             return session.query(WebhookEventRecord).filter(
                 WebhookEventRecord.delivered == False  # noqa: E712
             ).all()
+
+    def get_due_webhooks(self, limit: int = 50) -> list[WebhookEventRecord]:
+        """
+        Return undelivered webhooks that are due for delivery/retry now.
+        Evaluates next_attempt_at <= now (or IS NULL for first attempt).
+        """
+        now = datetime.now(tz=timezone.utc).replace(tzinfo=None)
+        with self._session() as session:
+            return (
+                session.query(WebhookEventRecord)
+                .filter(
+                    WebhookEventRecord.delivered == False,  # noqa: E712
+                    or_(
+                        WebhookEventRecord.next_attempt_at == None,  # noqa: E711
+                        WebhookEventRecord.next_attempt_at <= now,
+                    ),
+                )
+                .order_by(WebhookEventRecord.created_at.asc())
+                .limit(limit)
+                .all()
+            )
+
+    def update_webhook_attempt(
+        self,
+        event_id: str,
+        http_status_code: int | None,
+        delivered: bool,
+        next_attempt_at: datetime | None = None,
+    ) -> None:
+        """Update webhook event delivery status, attempt counter, and next retry schedule."""
+        now = datetime.now(tz=timezone.utc).replace(tzinfo=None)
+        with self._session() as session:
+            record = session.get(WebhookEventRecord, event_id)
+            if record:
+                record.http_status_code = http_status_code
+                record.delivered = delivered
+                record.attempts = (record.attempts or 0) + 1
+                record.last_attempted_at = now
+                record.next_attempt_at = next_attempt_at.replace(tzinfo=None) if next_attempt_at else None
