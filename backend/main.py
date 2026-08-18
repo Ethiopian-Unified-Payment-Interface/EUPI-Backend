@@ -62,7 +62,8 @@ from backend.domain.models.account import BankID
 
 # ── Presentation: API Routers ─────────────────────────────────────────────────
 from backend.presentation.api_v1 import accounts, auth, payments, webhooks
-from backend.presentation.api_superapp import users, linked_accounts, transfers, transactions
+from backend.presentation.api_superapp import users, linked_accounts, transfers, transactions, consents
+from backend.presentation.api_oauth import oauth
 from backend.presentation.api_admin import admin_router
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -344,6 +345,8 @@ app.include_router(users.router,           prefix=API_V1_PREFIX)
 app.include_router(linked_accounts.router, prefix=API_V1_PREFIX)
 app.include_router(transfers.router,       prefix=API_V1_PREFIX)
 app.include_router(transactions.router,    prefix=API_V1_PREFIX)
+app.include_router(consents.router,        prefix=API_V1_PREFIX)
+app.include_router(oauth.router,           prefix=API_V1_PREFIX)
 app.include_router(admin_router)
 
 

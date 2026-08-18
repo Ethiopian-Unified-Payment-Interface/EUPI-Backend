@@ -304,3 +304,118 @@ class SQLiteRepository:
             return session.query(WebhookEventRecord).filter(
                 WebhookEventRecord.delivered == False  # noqa: E712
             ).all()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # User Consents Management (Super App Privacy & OAuth)
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def get_user_consents(self, username: str) -> list[dict]:
+        """Return all consent records granted by a Super App user, with app metadata."""
+        import uuid
+        from backend.infrastructure.database.models import UserConsentRecord, DeveloperAppRecord
+
+        SCOPE_DESCRIPTIONS = {
+            "accounts:read": "View linked account numbers, balances, and basic profile info.",
+            "payments:initiate": "Initiate transfers and payments on your behalf.",
+            "identity:read:fin": "Read National ID (FIN) and verified identity details.",
+        }
+
+        with self._session() as session:
+            records = (
+                session.query(UserConsentRecord, DeveloperAppRecord)
+                .join(DeveloperAppRecord, UserConsentRecord.app_id == DeveloperAppRecord.app_id)
+                .filter(UserConsentRecord.username == username)
+                .all()
+            )
+
+            result = []
+            for consent_rec, app_rec in records:
+                result.append({
+                    "consent_id": consent_rec.consent_id,
+                    "app_id": app_rec.app_id,
+                    "app_name": app_rec.app_name,
+                    "merchant_name": app_rec.merchant_name,
+                    "app_logo_url": getattr(app_rec, "app_logo_url", None),
+                    "scope": consent_rec.scope,
+                    "scope_description": SCOPE_DESCRIPTIONS.get(
+                        consent_rec.scope, consent_rec.scope
+                    ),
+                    "status": consent_rec.status,
+                    "granted_at": consent_rec.granted_at.isoformat() + "Z",
+                    "expires_at": consent_rec.expires_at.isoformat() + "Z" if consent_rec.expires_at else None,
+                    "revoked_at": consent_rec.revoked_at.isoformat() + "Z" if consent_rec.revoked_at else None,
+                })
+            return result
+
+    def revoke_user_consent(self, username: str, consent_id: str) -> bool:
+        """Revoke a single consent scope for a user."""
+        from backend.infrastructure.database.models import UserConsentRecord
+        with self._session() as session:
+            record = (
+                session.query(UserConsentRecord)
+                .filter(
+                    UserConsentRecord.consent_id == consent_id,
+                    UserConsentRecord.username == username,
+                )
+                .first()
+            )
+            if not record:
+                return False
+            record.status = "REVOKED"
+            record.revoked_at = datetime.now(tz=timezone.utc).replace(tzinfo=None)
+            return True
+
+    def revoke_user_app_consents(self, username: str, app_id: str) -> bool:
+        """Revoke all active permissions granted to a specific application."""
+        from backend.infrastructure.database.models import UserConsentRecord
+        with self._session() as session:
+            records = (
+                session.query(UserConsentRecord)
+                .filter(
+                    UserConsentRecord.app_id == app_id,
+                    UserConsentRecord.username == username,
+                    UserConsentRecord.status == "GRANTED",
+                )
+                .all()
+            )
+            if not records:
+                return False
+            now = datetime.now(tz=timezone.utc).replace(tzinfo=None)
+            for r in records:
+                r.status = "REVOKED"
+                r.revoked_at = now
+            return True
+
+    def grant_user_consent(self, username: str, app_id: str, scope: str) -> dict:
+        """Record or update a user consent grant."""
+        import uuid
+        from backend.infrastructure.database.models import UserConsentRecord
+        now = datetime.now(tz=timezone.utc).replace(tzinfo=None)
+        consent_id = f"CNS-{uuid.uuid4().hex[:8].upper()}"
+
+        with self._session() as session:
+            existing = (
+                session.query(UserConsentRecord)
+                .filter(
+                    UserConsentRecord.username == username,
+                    UserConsentRecord.app_id == app_id,
+                    UserConsentRecord.scope == scope,
+                )
+                .first()
+            )
+            if existing:
+                existing.status = "GRANTED"
+                existing.granted_at = now
+                existing.revoked_at = None
+                return {"consent_id": existing.consent_id, "status": "GRANTED"}
+            else:
+                record = UserConsentRecord(
+                    consent_id=consent_id,
+                    username=username,
+                    app_id=app_id,
+                    scope=scope,
+                    status="GRANTED",
+                    granted_at=now,
+                )
+                session.add(record)
+                return {"consent_id": consent_id, "status": "GRANTED"}

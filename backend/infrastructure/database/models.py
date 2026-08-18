@@ -170,10 +170,50 @@ class DeveloperAppRecord(Base):
     app_name: Mapped[str] = mapped_column(String(100), nullable=False)
     merchant_name: Mapped[str] = mapped_column(String(100), nullable=False)
     client_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    client_secret_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    webhook_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    redirect_uris: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list
+    rate_limit_per_min: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
+    app_logo_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     environment: Mapped[str] = mapped_column(String(20), default="LIVE", nullable=False)
     allowed_scopes: Mapped[str] = mapped_column(Text, nullable=False)  # JSON list
     status: Mapped[str] = mapped_column(String(20), default="ACTIVE", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class UserConsentRecord(Base):
+    """
+    Persisted consent grant from a Super App user to a Third-Party Application.
+    Tracks granular scope approvals and explicit user revocation.
+    """
+    __tablename__ = "user_consents"
+
+    consent_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    username: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    app_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    scope: Mapped[str] = mapped_column(String(100), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="GRANTED", nullable=False)  # GRANTED, REVOKED, EXPIRED
+    granted_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AuthorizationCodeRecord(Base):
+    """
+    Single-use, short-lived OAuth 2.0 authorization codes for PKCE consent flow.
+    """
+    __tablename__ = "authorization_codes"
+
+    code_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    request_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    app_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    username: Mapped[str] = mapped_column(String(64), nullable=False)
+    scopes: Mapped[str] = mapped_column(Text, nullable=False)  # JSON list
+    redirect_uri: Mapped[str] = mapped_column(String(512), nullable=False)
+    code_challenge: Mapped[str] = mapped_column(String(128), nullable=False)
+    code_challenge_method: Mapped[str] = mapped_column(String(10), default="S256", nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class KYBRequestRecord(Base):
