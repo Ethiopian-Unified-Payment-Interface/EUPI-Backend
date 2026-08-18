@@ -63,17 +63,13 @@ class CallbackAcknowledgement(BaseModel):
     ),
 )
 def receive_bank_callback(body: BankCallbackBody) -> CallbackAcknowledgement:
-    from backend.main import get_pis_service
-    from backend.presentation.api_v1.payments import _payment_store
+    from backend.main import get_pis_service, get_repo
+    from backend.presentation.api_v1.payments import _get_or_404, _payment_store
 
-    payment = _payment_store.get(body.payment_id)
-    if not payment:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Payment '{body.payment_id}' not found.",
-        )
-
+    payment = _get_or_404(body.payment_id)
     pis = get_pis_service()
+    repo = get_repo()
+
     try:
         final_payment = pis.process_callback(
             payment=payment,
@@ -87,6 +83,7 @@ def receive_bank_callback(body: BankCallbackBody) -> CallbackAcknowledgement:
         )
 
     _payment_store[body.payment_id] = final_payment
+    repo.update_payment(final_payment)
 
     # TODO: enqueue async POST to the TPP's webhook_url.
     if final_payment.webhook_url:

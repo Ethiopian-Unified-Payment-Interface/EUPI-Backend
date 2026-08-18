@@ -41,17 +41,21 @@ logger = logging.getLogger(__name__)
 # ── Static cost & latency baselines per rail (ETB fee, base latency in ms) ────
 # These are the "at rest" values; actual latency is measured during health_check.
 _RAIL_COSTS: dict[BankID, Decimal] = {
-    BankID.COOP:    Decimal("2.50"),
-    BankID.CBE:     Decimal("3.00"),
-    BankID.WEGAGEN: Decimal("2.00"),
-    BankID.AWASH:   Decimal("2.75"),
+    BankID.COOP:      Decimal("2.50"),
+    BankID.CBE:       Decimal("3.00"),
+    BankID.WEGAGEN:   Decimal("2.00"),
+    BankID.AWASH:     Decimal("2.75"),
+    BankID.ABYSSINIA: Decimal("2.20"),
+    BankID.BERHAN:    Decimal("2.10"),
 }
 
 _BASE_LATENCY_MS: dict[BankID, float] = {
-    BankID.COOP:    150.0,
-    BankID.CBE:      95.0,
-    BankID.WEGAGEN: 140.0,
-    BankID.AWASH:   160.0,
+    BankID.COOP:      150.0,
+    BankID.CBE:        95.0,
+    BankID.WEGAGEN:   140.0,
+    BankID.AWASH:     160.0,
+    BankID.ABYSSINIA: 120.0,
+    BankID.BERHAN:    140.0,
 }
 
 # Normalisation ceilings (values at or above these score 0)

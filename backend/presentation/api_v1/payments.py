@@ -101,21 +101,30 @@ def initiate_payment(
     pis = get_pis_service()
     repo = get_repo()
     req = PaymentInitiateRequest(**body.model_dump(exclude={"webhook_url"}))
+
+    # Pre-flight idempotency check: if end_to_end_id already exists, return original payment
+    existing = repo.get_payment_by_end_to_end_id(req.end_to_end_id)
+    if existing:
+        _payment_store[existing.payment_id] = existing
+        return _payment_to_response(existing)
+
     try:
         payment = pis.initiate_payment(request=req, webhook_url=body.webhook_url)
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
     _payment_store[payment.payment_id] = payment
-    # Catch duplicate end_to_end_id to return 409 instead of 500.
     try:
         repo.save_payment(payment)
     except IntegrityError:
-        del _payment_store[payment.payment_id]  # roll back in-memory state too
+        del _payment_store[payment.payment_id]
+        existing = repo.get_payment_by_end_to_end_id(req.end_to_end_id)
+        if existing:
+            _payment_store[existing.payment_id] = existing
+            return _payment_to_response(existing)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"A payment with end_to_end_id '{req.end_to_end_id}' already exists. "
-                   "Use a unique end_to_end_id for each payment (idempotency key).",
+            detail=f"A payment with end_to_end_id '{req.end_to_end_id}' already exists.",
         )
     return _payment_to_response(payment)
 
@@ -215,6 +224,11 @@ def cancel_payment(payment_id: str, body: PaymentCancelBody) -> PaymentResponse:
 
 def _get_or_404(payment_id: str):
     payment = _payment_store.get(payment_id)
+    if not payment:
+        from backend.main import get_repo
+        payment = get_repo().get_payment(payment_id)
+        if payment:
+            _payment_store[payment_id] = payment
     if not payment:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Payment '{payment_id}' not found.")
     return payment

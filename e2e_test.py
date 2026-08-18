@@ -432,7 +432,8 @@ r = req("POST", "/v1/superapp/transfers", body={
     "sender_username": "abebe_test_e2e",
     "recipient_username": "abebe_test_e2e",
     "amount": "100.00",
-    "currency": "ETB"
+    "currency": "ETB",
+    "pin": "123456"
 }, token=sender_session_token)
 check("Self-transfer rejected (400)", r.get("_status") == 400, str(r))
 
@@ -441,7 +442,8 @@ r = req("POST", "/v1/superapp/transfers", body={
     "sender_username": "abebe_test_e2e",
     "recipient_username": "nonexistent_recipient_xyz",
     "amount": "100.00",
-    "currency": "ETB"
+    "currency": "ETB",
+    "pin": "123456"
 }, token=sender_session_token)
 check("Non-existent recipient rejected (400)", r.get("_status") == 400, str(r))
 
@@ -450,7 +452,8 @@ r = req("POST", "/v1/superapp/transfers", body={
     "sender_username": "abebe_test_e2e",
     "recipient_username": "daniel_e2e",
     "amount": "100.00",
-    "currency": "ETB"
+    "currency": "ETB",
+    "pin": "123456"
 }, token=sender_session_token)
 check("Recipient without linked account rejected (400)", r.get("_status") == 400, str(r))
 
@@ -459,7 +462,8 @@ r = req("POST", "/v1/superapp/transfers", body={
     "sender_username": "selamawit_e2e",
     "recipient_username": "abebe_test_e2e",
     "amount": "100.00",
-    "currency": "ETB"
+    "currency": "ETB",
+    "pin": "123456"
 }, token=sender_session_token)
 check("Transfer impersonation rejected (403)", r.get("_status") == 403, str(r))
 
@@ -468,7 +472,8 @@ r = req("POST", "/v1/superapp/transfers", body={
     "sender_username": "abebe_test_e2e",
     "recipient_username": "selamawit_e2e",
     "amount": "99999999.00",
-    "currency": "ETB"
+    "currency": "ETB",
+    "pin": "123456"
 }, token=sender_session_token)
 check("Insufficient balance rejected (400)", r.get("_status") == 400, str(r))
 
@@ -478,7 +483,8 @@ r = req("POST", "/v1/superapp/transfers", body={
     "recipient_username": "selamawit_e2e",
     "amount": "500.00",
     "currency": "ETB",
-    "remittance_info": "Dinner split payment"
+    "remittance_info": "Dinner split payment",
+    "pin": "123456"
 }, token=sender_session_token)
 check("Transfer created (PENDING)", r.get("status") == "PENDING", str(r))
 transfer_payment_id = r.get("payment_id", "")
