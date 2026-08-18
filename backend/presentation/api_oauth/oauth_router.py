@@ -66,6 +66,7 @@ class ConsentApproveBody(BaseModel):
 
     username: str = Field(..., description="Super app handle of approving user.")
     approved_scopes: list[str] = Field(..., description="List of approved scope strings.")
+    pin: str | None = Field(default=None, description="Security PIN for consent approval validation.")
 
 
 # In-memory store for pending authorization requests (short-lived)
@@ -344,14 +345,27 @@ def approve_consent(request_id: str, body: ConsentApproveBody) -> dict[str, str]
         )
 
     app_id = req["app_id"]
-    from backend.main import get_consent_service
+    from backend.main import get_consent_service, get_user_registration_service
     consent_service = get_consent_service()
+
+    # Optional PIN security verification
+    if body.pin:
+        try:
+            reg_service = get_user_registration_service()
+            user = reg_service._user_repo.get_by_username(body.username)
+            if user and user.pin_hash:
+                reg_service._verify_pin_or_raise(user, body.pin)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"PIN verification failed: {str(exc)}",
+            )
 
     # Record consent grants in DB
     for s_str in body.approved_scopes:
         try:
             cs = ConsentScope(s_str)
-            consent_service.grant_consent(
+            consent_service.grant(
                 username=body.username,
                 app_id=app_id,
                 scope=cs,
@@ -376,6 +390,101 @@ def approve_consent(request_id: str, body: ConsentApproveBody) -> dict[str, str]
         "state": req["state"],
         "redirect_url": redirect_url,
     }
+
+
+class IntrospectRequestBody(BaseModel):
+    token: str = Field(..., description="The OAuth 2.0 access or refresh token string to introspect.")
+    token_type_hint: str | None = Field(default=None, description="Optional hint: access_token or refresh_token")
+
+
+class RevokeRequestBody(BaseModel):
+    token: str = Field(..., description="The token string to revoke.")
+    token_type_hint: str | None = Field(default=None)
+
+
+@router.post(
+    "/introspect",
+    status_code=status.HTTP_200_OK,
+    summary="Introspect OAuth 2.0 token status (RFC 7662)",
+    description="Returns active status, scopes, client_id, and metadata for a given token string.",
+)
+def introspect_token(body: IntrospectRequestBody) -> dict[str, Any]:
+    from backend.infrastructure.auth.jwt_handler import (
+        decode_tpp_access_jwt,
+        decode_tpp_user_access_jwt,
+    )
+    from backend.main import get_repo
+    repo = get_repo()
+
+    # 1. Try decoding as tpp_user_access
+    try:
+        claims = decode_tpp_user_access_jwt(body.token)
+        jti = claims.get("jti")
+        if jti and repo.is_token_revoked(jti):
+            return {"active": False}
+        return {
+            "active": True,
+            "scope": " ".join(claims.get("scopes", [])),
+            "client_id": claims.get("client_id"),
+            "sub": claims.get("sub"),
+            "exp": claims.get("exp"),
+            "token_type": "tpp_user_access",
+            "environment": claims.get("environment"),
+        }
+    except Exception:
+        pass
+
+    # 2. Try decoding as tpp_access
+    try:
+        claims = decode_tpp_access_jwt(body.token)
+        jti = claims.get("jti")
+        if jti and repo.is_token_revoked(jti):
+            return {"active": False}
+        return {
+            "active": True,
+            "scope": " ".join(claims.get("scopes", [])),
+            "client_id": claims.get("client_id"),
+            "sub": claims.get("sub"),
+            "exp": claims.get("exp"),
+            "token_type": "tpp_access",
+            "environment": claims.get("environment"),
+        }
+    except Exception:
+        pass
+
+    return {"active": False}
+
+
+@router.post(
+    "/revoke",
+    status_code=status.HTTP_200_OK,
+    summary="Revoke OAuth 2.0 token (RFC 7009)",
+    description="Revokes an active access token or authorization consent.",
+)
+def revoke_token(body: RevokeRequestBody) -> dict[str, Any]:
+    # RFC 7009 specifies returning HTTP 200 OK regardless of whether token was active
+    from backend.main import get_repo
+    from backend.infrastructure.auth.jwt_handler import decode_tpp_access_jwt, decode_tpp_user_access_jwt
+
+    try:
+        jti = None
+        try:
+            claims = decode_tpp_user_access_jwt(body.token)
+            jti = claims.get("jti")
+        except Exception:
+            try:
+                claims = decode_tpp_access_jwt(body.token)
+                jti = claims.get("jti")
+            except Exception:
+                pass
+
+        if jti:
+            repo = get_repo()
+            repo.revoke_token(jti)
+    except Exception:
+        pass
+
+    return {}
 
 
 def secrets_token() -> str:
