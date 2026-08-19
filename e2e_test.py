@@ -20,8 +20,11 @@ Comprehensive, idempotent end-to-end integration test suite verifying 100% of ga
  16. Admin Operations (Dashboard Stats, Bank Controls, Audit Trail)
 """
 
+import base64
+import hashlib
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 
@@ -328,8 +331,80 @@ check("Token revocation returns 200", "_error" not in r_rv, str(r_rv))
 r_in2 = req("POST", "/v1/oauth/introspect", {"token": tpp_token})
 check("Revoked token introspection returns active=False", r_in2.get("active") is False, str(r_in2))
 
-# ── 12. Developer Webhook Inspector, Explorer & KYB Pipeline ──
-print("\n── 12. Developer Webhook Inspector, Explorer & KYB Pipeline ──")
+# ── 12. Interactive User-Delegated OAuth 2.0 PKCE & Consent Lifecycle ──
+print("\n── 12. Interactive User-Delegated OAuth 2.0 PKCE & Consent Lifecycle ──")
+
+# A. Generate RFC 7636 PKCE S256 Challenge
+code_verifier = f"e2e_verifier_{uuid.uuid4().hex}_{uuid.uuid4().hex}"
+challenge_bytes = hashlib.sha256(code_verifier.encode("ascii")).digest()
+code_challenge = base64.urlsafe_b64encode(challenge_bytes).decode("ascii").rstrip("=")
+
+# B. Initiate OAuth 2.0 Authorization Request
+r_auth = req(
+    "GET",
+    f"/v1/oauth/authorize?response_type=code&client_id={dev_client_id}&redirect_uri=https%3A%2F%2Flocalhost%3A3000%2Fcallback&scope=accounts%3Aread%20payments%3Ainitiate&state=xyz123&code_challenge={code_challenge}&code_challenge_method=S256"
+)
+check("OAuth2 PKCE authorization initiated", "request_id" in r_auth and "requested_scopes" in r_auth, str(r_auth))
+auth_req_id = r_auth.get("request_id", "")
+
+# C. Citizen Approves Scopes in Super App (Authenticated with PIN)
+r_appr_consent = req(
+    "POST",
+    f"/v1/oauth/consent/{auth_req_id}/approve",
+    {
+        "username": sender_username,
+        "approved_scopes": ["accounts:read", "payments:initiate"],
+        "pin": "123456",
+    },
+)
+check("Citizen approved scopes with PIN & received authorization code", "code" in r_appr_consent and "redirect_url" in r_appr_consent, str(r_appr_consent))
+auth_code = r_appr_consent.get("code", "")
+
+# D. Merchant App Exchanges Authorization Code + PKCE Verifier for User Token
+r_user_token = req(
+    "POST",
+    "/v1/oauth/token",
+    {
+        "grant_type": "authorization_code",
+        "client_id": dev_client_id,
+        "client_secret": active_secret,
+        "code": auth_code,
+        "code_verifier": code_verifier,
+        "redirect_uri": "https://localhost:3000/callback",
+    },
+)
+check("Exchanged PKCE code for Delegated User Access Token", "access_token" in r_user_token, str(r_user_token))
+delegated_user_token = r_user_token.get("access_token", "")
+
+# E. Introspect Delegated User Token (Verifies Pairwise 128-bit psu_id)
+r_user_intro = req("POST", "/v1/oauth/introspect", {"token": delegated_user_token})
+check("Delegated token introspection active with psu_id", r_user_intro.get("active") is True and "sub" in r_user_intro, str(r_user_intro))
+psu_id = r_user_intro.get("sub", "")
+
+# F. Verify Super App Consents List Displays Connected Merchant App
+r_my_consents_updated = req("GET", "/v1/superapp/consents", token=sender_session_token)
+active_grants = [
+    c for c in r_my_consents_updated.get("consents", [])
+    if c.get("app_id") == dev_app_id and c.get("status") == "GRANTED"
+]
+check("Super App citizen sees active merchant app connection", len(active_grants) >= 1, str(r_my_consents_updated))
+
+# G. Developer App Analytics Reflects Connected Citizen (Zero-PII)
+r_dev_cns = req("GET", f"/v1/developer/apps/{dev_app_id}/consents", token=dev_token)
+check("Developer analytics confirms connected user pseudonym", r_dev_cns.get("total_connected_users", 0) >= 1, str(r_dev_cns))
+
+# H. Citizen Revokes Permission / Disconnects App via Super App
+r_disconn = req("DELETE", f"/v1/superapp/consents/apps/{dev_app_id}", token=sender_session_token)
+check("Citizen disconnected merchant app in one action", "withdrawn" in r_disconn.get("message", ""), str(r_disconn))
+
+# I. Revoke Delegated Token & Verify Inactive
+r_rv_user = req("POST", "/v1/oauth/revoke", {"token": delegated_user_token})
+check("Delegated token revoked via RFC 7009", "_error" not in r_rv_user, str(r_rv_user))
+r_intro_post_rev = req("POST", "/v1/oauth/introspect", {"token": delegated_user_token})
+check("Delegated token is immediately inactive", r_intro_post_rev.get("active") is False, str(r_intro_post_rev))
+
+# ── 13. Developer Webhook Inspector, Explorer & KYB Pipeline ──
+print("\n── 13. Developer Webhook Inspector, Explorer & KYB Pipeline ──")
 # Webhooks list
 r_wh = req("GET", f"/v1/developer/apps/{dev_app_id}/webhooks", token=dev_token)
 check("Developer webhooks inspector returned list", "webhook_events" in r_wh, str(r_wh))
@@ -360,8 +435,8 @@ kyb_req_id = r_kyb.get("kyb_id", "")
 r_kstat = req("GET", "/v1/developer/kyb-status", token=dev_token)
 check("KYB status tracking returned pending state", r_kstat.get("current_kyb_status") == "PENDING_KYB", str(r_kstat))
 
-# ── 13. Admin Operations & Compliance Bridge ──
-print("\n── 13. Admin Operations & Compliance Bridge ──")
+# ── 14. Admin Operations & Compliance Bridge ──
+print("\n── 14. Admin Operations & Compliance Bridge ──")
 r_admlog = req("POST", "/v1/admin/auth/login", {
     "email": "admin@kifiya.com",
     "password": "ChangeMe!Dev123",
