@@ -24,7 +24,9 @@ class BankRailStatus(str, Enum):
 
 class KYBStatus(str, Enum):
     """KYB (Know Your Business) verification status for merchants."""
+    UNVERIFIED = "UNVERIFIED"
     PENDING = "PENDING"
+    PENDING_KYB = "PENDING_KYB"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
 
@@ -32,6 +34,8 @@ class KYBStatus(str, Enum):
 class MerchantStatus(str, Enum):
     """Account status for TPP merchants."""
     ACTIVE = "ACTIVE"
+    SANDBOX_ACTIVE = "SANDBOX_ACTIVE"
+    PENDING = "PENDING"
     SUSPENDED = "SUSPENDED"
     INACTIVE = "INACTIVE"
 
