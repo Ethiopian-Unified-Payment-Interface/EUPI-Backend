@@ -45,6 +45,8 @@ class PaymentRail(str, Enum):
     CBE = "CBE"
     WEGAGEN = "WEGAGEN"
     AWASH = "AWASH"
+    ABYSSINIA = "ABYSSINIA"
+    BERHAN = "BERHAN"
     ETHIOPIAN_EFT = "ETHIOPIAN_EFT"  # National EFT interbank rail
 
 

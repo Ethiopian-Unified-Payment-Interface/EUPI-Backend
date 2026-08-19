@@ -503,7 +503,7 @@ app = FastAPI(
         "### Test Data & Credentials\n"
         "- **Test FINs**: `12345678901234` (Abebe Girma Tadesse), `23456789012345` (Selamawit Bekele Hailu)\n"
         "- **Mock OTP Code**: `123456`\n"
-        "- **Active Bank Rails**: `COOP`, `CBE`, `WEGAGEN`\n"
+        "- **Active Bank Rails**: `COOP`, `CBE`, `WEGAGEN`, `AWASH`, `ABYSSINIA`, `BERHAN`\n"
     ),
     version="1.0.0",
     license_info={"name": "Proprietary"},
