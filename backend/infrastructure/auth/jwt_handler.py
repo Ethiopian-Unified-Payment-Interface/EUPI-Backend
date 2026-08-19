@@ -51,6 +51,7 @@ TOKEN_TYPE_REGISTRATION: Final = "registration_verification"
 TOKEN_TYPE_ADMIN: Final = "admin_session"
 TOKEN_TYPE_TPP: Final = "tpp_access"
 TOKEN_TYPE_TPP_USER: Final = "tpp_user_access"
+TOKEN_TYPE_DEVELOPER: Final = "developer_session"
 
 ISSUER: Final = "kifiya-open-gateway"
 
@@ -428,5 +429,40 @@ def decode_tpp_user_access_jwt(token: str) -> dict[str, Any]:
         token,
         expected_type=TOKEN_TYPE_TPP_USER,
         required_claims=["sub", "jti", "psu_id", "app_id", "client_id", "environment", "scopes"],
+    )
+
+
+# ── Developer portal session tokens ──────────────────────────────────────────
+
+
+def create_developer_session_jwt(
+    developer_id: str,
+    email: str,
+    company_name: str,
+    status: str = "SANDBOX_ACTIVE",
+    ttl_seconds: int = 86400,
+) -> tuple[str, str, datetime]:
+    """
+    Issue a signed session token for a Developer Portal user.
+    """
+    return _issue(
+        {
+            "sub": developer_id,
+            "type": TOKEN_TYPE_DEVELOPER,
+            "developer_id": developer_id,
+            "email": email,
+            "company_name": company_name,
+            "status": status,
+        },
+        ttl_seconds,
+    )
+
+
+def decode_developer_session_jwt(token: str) -> dict[str, Any]:
+    """Decode and verify a Developer Portal session token."""
+    return _decode(
+        token,
+        expected_type=TOKEN_TYPE_DEVELOPER,
+        required_claims=["sub", "jti", "developer_id", "email"],
     )
 

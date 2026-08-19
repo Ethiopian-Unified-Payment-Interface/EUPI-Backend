@@ -78,6 +78,7 @@ from backend.application.use_cases.ledger_service import LedgerService
 from backend.application.use_cases.admin_bank_service import AdminBankService
 from backend.application.use_cases.admin_merchant_service import AdminMerchantService
 from backend.application.use_cases.admin_analytics_service import AdminAnalyticsService
+from backend.application.use_cases.developer_auth_service import DeveloperAuthService
 
 # ── Domain ────────────────────────────────────────────────────────────────────
 from backend.domain.models.account import BankID
@@ -92,6 +93,13 @@ from backend.presentation.api_superapp import (
     transactions as superapp_transactions,
 )
 from backend.presentation.api_oauth import oauth_router
+from backend.presentation.api_developer import (
+    auth as developer_auth,
+    apps as developer_apps,
+    webhooks as developer_webhooks,
+    explorer as developer_explorer,
+    kyb as developer_kyb,
+)
 from backend.presentation.api_admin import admin_router
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -131,6 +139,7 @@ _admin_auth_service: AdminAuthService | None = None
 _admin_bank_service: AdminBankService | None = None
 _admin_merchant_service: AdminMerchantService | None = None
 _admin_analytics_service: AdminAnalyticsService | None = None
+_developer_auth_service: DeveloperAuthService | None = None
 
 
 # ── DI Accessors (imported by presentation routers) ──────────────────────────
@@ -215,6 +224,11 @@ def get_admin_analytics_service() -> AdminAnalyticsService:
     return _admin_analytics_service
 
 
+def get_developer_auth_service() -> DeveloperAuthService:
+    assert _developer_auth_service is not None, "DeveloperAuthService not initialised."
+    return _developer_auth_service
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Admin Bootstrap
 # ══════════════════════════════════════════════════════════════════════════════
@@ -278,6 +292,7 @@ async def lifespan(app: FastAPI):
     global _ais_service, _pis_service, _identity_port
     global _user_registration_service, _account_linking_service, _superapp_transfer_service
     global _admin_auth_service, _admin_bank_service, _admin_merchant_service, _admin_analytics_service
+    global _developer_auth_service
 
     # 0. Shared security primitives
     # Security primitives first: UserRepository needs the vault to encrypt
@@ -385,6 +400,10 @@ async def lifespan(app: FastAPI):
     _admin_analytics_service = AdminAnalyticsService(
         analytics_repo=_analytics_repo,
         audit_repo=_audit_repo,
+    )
+    _developer_auth_service = DeveloperAuthService(
+        db=_db,
+        password_hasher=_password_hasher,
     )
 
     # 10. Launch background Webhook Delivery Worker
@@ -516,6 +535,11 @@ app.include_router(transfers.router,       prefix=API_V1_PREFIX)
 app.include_router(consents.router,        prefix=API_V1_PREFIX)
 app.include_router(superapp_transactions.router, prefix=API_V1_PREFIX)
 app.include_router(oauth_router.router,    prefix=API_V1_PREFIX)
+app.include_router(developer_auth.router,   prefix=API_V1_PREFIX)
+app.include_router(developer_apps.router,   prefix=API_V1_PREFIX)
+app.include_router(developer_webhooks.router, prefix=API_V1_PREFIX)
+app.include_router(developer_explorer.router, prefix=API_V1_PREFIX)
+app.include_router(developer_kyb.router,      prefix=API_V1_PREFIX)
 app.include_router(admin_router)
 
 
