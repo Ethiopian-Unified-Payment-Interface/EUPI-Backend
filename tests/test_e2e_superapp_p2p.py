@@ -172,7 +172,7 @@ def accounts_of(client: TestClient, token: str) -> list[dict[str, Any]]:
 def admin_token(client: TestClient) -> str:
     response = client.post(
         "/v1/admin/auth/login",
-        json={"email": "admin@kifiya.com", "password": "E2ePass!123"},
+        json={"email": "admin@kifiya.com", "password": "ChangeMe!Dev123"},
     )
     assert response.status_code == 200, response.text
     return response.json()["access_token"]
