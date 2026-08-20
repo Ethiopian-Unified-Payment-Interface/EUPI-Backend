@@ -101,6 +101,7 @@ from backend.presentation.api_superapp import (
     transfers,
     consents,
     transactions as superapp_transactions,
+    apps as superapp_apps,
 )
 from backend.presentation.api_oauth import oauth_router
 from backend.presentation.api_developer import (
@@ -597,6 +598,7 @@ app.include_router(linked_accounts.router, prefix=API_V1_PREFIX)
 app.include_router(transfers.router,       prefix=API_V1_PREFIX)
 app.include_router(consents.router,        prefix=API_V1_PREFIX)
 app.include_router(superapp_transactions.router, prefix=API_V1_PREFIX)
+app.include_router(superapp_apps.router,    prefix=API_V1_PREFIX)
 app.include_router(oauth_router.router,    prefix=API_V1_PREFIX)
 app.include_router(developer_auth.router,   prefix=API_V1_PREFIX)
 app.include_router(developer_apps.router,   prefix=API_V1_PREFIX)
