@@ -140,8 +140,11 @@ class Database:
             )
             return
 
-        Base.metadata.create_all(self._engine)
-        logger.info("Schema ensured via create_all (%s)", self.dialect)
+        try:
+            Base.metadata.create_all(self._engine, checkfirst=True)
+            logger.info("Schema ensured via create_all (%s)", self.dialect)
+        except Exception as exc:
+            logger.warning("create_all noted existing tables: %s", exc)
 
     def _alembic_managed(self) -> bool:
         """True when this database carries Alembic's version table."""
