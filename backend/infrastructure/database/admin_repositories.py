@@ -160,28 +160,44 @@ class MerchantRepository(RepositoryBase, MerchantRepositoryPort):
 
     def _seed_default_merchants(self) -> None:
         """Seed default TPP merchant profiles and KYB requests."""
+        from backend.infrastructure.auth.password_hasher import Argon2PasswordHasher
+        hasher = Argon2PasswordHasher()
+        default_pwd_hash = hasher.hash("SecureDeveloper2026!")
+
         now = datetime.now(tz=timezone.utc).replace(tzinfo=None)
         with self._session() as session:
             if session.query(MerchantRecord).count() == 0:
                 m1 = MerchantRecord(
                     merchant_id="mer_1234",
                     company_name="Zemen Fintech PLC",
+                    contact_name="Abebe Girma",
                     email="contact@zemenfintech.et",
                     environment="LIVE",
+                    password_hash=default_pwd_hash,
                     kyb_status="APPROVED",
                     status="ACTIVE",
+                    is_active=True,
                     created_at=now,
                 )
                 m2 = MerchantRecord(
                     merchant_id="mer_5678",
                     company_name="EthioPay Solutions PLC",
+                    contact_name="Girma Tadesse",
                     email="info@ethiopay.et",
                     environment="LIVE",
+                    password_hash=default_pwd_hash,
                     kyb_status="APPROVED",
                     status="ACTIVE",
+                    is_active=True,
                     created_at=now,
                 )
                 session.add_all([m1, m2])
+
+            # Ensure seeded merchants without password_hash receive default credentials
+            merchants_without_pwd = session.query(MerchantRecord).filter(MerchantRecord.password_hash.is_(None)).all()
+            for m in merchants_without_pwd:
+                m.password_hash = default_pwd_hash
+                m.is_active = True
 
             if session.query(DeveloperAppRecord).count() == 0:
                 app1 = DeveloperAppRecord(
