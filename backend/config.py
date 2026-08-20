@@ -25,6 +25,10 @@ _KNOWN_DEFAULT_SECRETS: frozenset[str] = frozenset({
 
 _MIN_SECRET_LENGTH = 32
 
+_CBS_MODE_SIMULATED = "simulated"
+_CBS_MODE_LIVE = "live"
+_CBS_MODES = frozenset({_CBS_MODE_SIMULATED, _CBS_MODE_LIVE})
+
 
 class ConfigurationError(RuntimeError):
     """Raised at startup when configuration is unsafe for the target environment."""
@@ -67,6 +71,36 @@ class Settings:
         "sqlite:///./kifiya_gateway.db",
     )
 
+    # ── Core Banking mode ─────────────────────────────────────────────────────
+    # "simulated" runs every rail against the in-database simulated core banking
+    # system: real balances, real atomic debit/credit, real settlement. No live
+    # bank is contacted. "live" is reserved for adapters backed by an actual CBS
+    # and is rejected until one exists, so the mode can never silently degrade
+    # into pretending a transfer happened.
+    CBS_MODE: str = os.getenv("CBS_MODE", "simulated").strip().lower()
+
+    # Simulated funds are not money. Running the simulator outside DEBUG is a
+    # legitimate thing to do — a shared sandbox is exactly that — but it has to
+    # be a decision someone made on purpose, not a default that survived into an
+    # environment where a user could mistake the balances for their own.
+    ALLOW_SIMULATED_CBS: bool = os.getenv("ALLOW_SIMULATED_CBS", "false").lower() == "true"
+
+    # Delay between the bank accepting a debit order and confirming settlement.
+    # Real settlement is asynchronous; collapsing it to zero would hide every
+    # bug that only appears while a payment is in flight.
+    CBS_SETTLEMENT_DELAY_SECONDS: float = float(
+        os.getenv("CBS_SETTLEMENT_DELAY_SECONDS", "3")
+    )
+    CBS_SETTLEMENT_POLL_INTERVAL_SECONDS: float = float(
+        os.getenv("CBS_SETTLEMENT_POLL_INTERVAL_SECONDS", "2")
+    )
+    # Probability that the simulated bank rejects a transfer at settlement.
+    # Zero by default so demos are predictable; raise it to exercise the FAILED
+    # path and the reversal it triggers.
+    CBS_SETTLEMENT_FAILURE_RATE: float = float(
+        os.getenv("CBS_SETTLEMENT_FAILURE_RATE", "0")
+    )
+
     # ── Bank CBS API Keys ─────────────────────────────────────────────────────
     COOP_CBS_API_KEY: str = os.getenv("COOP_CBS_API_KEY", "mock-coop-key")
     CBE_CBS_API_KEY: str = os.getenv("CBE_CBS_API_KEY", "mock-cbe-key")
@@ -93,22 +127,69 @@ class Settings:
     DEBUG: bool = os.getenv("DEBUG", "true").lower() == "true"
     CORS_ORIGINS: list[str] = os.getenv("CORS_ORIGINS", "*").split(",")
 
+    @property
+    def SIMULATED_CBS(self) -> bool:
+        """True when bank rails are served by the simulated core banking system."""
+        return self.CBS_MODE == _CBS_MODE_SIMULATED
+
     # ── Startup validation ────────────────────────────────────────────────────
 
     def validate(self) -> None:
         """
-        Refuse to start with development defaults outside DEBUG mode.
+        Refuse to start with an unsafe or incoherent configuration.
 
         Called at import time so misconfiguration fails before the server binds
         a port, rather than at the first request that happens to need a secret.
 
+        Most checks only apply outside DEBUG, where development defaults are
+        expected. The core banking checks apply everywhere: an unrecognised
+        `CBS_MODE` is a bug in any environment, and getting it wrong decides
+        whether the platform moves simulated money or none at all.
+
         Raises:
             ConfigurationError: With every problem found, not just the first.
         """
+        always: list[str] = []
+
+        if self.CBS_MODE not in _CBS_MODES:
+            always.append(
+                f"CBS_MODE is '{self.CBS_MODE}'. Valid values are "
+                f"{', '.join(sorted(_CBS_MODES))}."
+            )
+        elif self.CBS_MODE == _CBS_MODE_LIVE:
+            always.append(
+                "CBS_MODE=live requires bank adapters backed by a real core "
+                "banking system, and none is integrated yet. Leave CBS_MODE "
+                "unset until a bank agreement is in place; a rail that cannot "
+                "reach a bank must fail loudly, not accept payments it will "
+                "never settle."
+            )
+
+        if not 0.0 <= self.CBS_SETTLEMENT_FAILURE_RATE <= 1.0:
+            always.append(
+                f"CBS_SETTLEMENT_FAILURE_RATE must be between 0 and 1 "
+                f"(got {self.CBS_SETTLEMENT_FAILURE_RATE})."
+            )
+
+        if self.CBS_SETTLEMENT_DELAY_SECONDS < 0:
+            always.append("CBS_SETTLEMENT_DELAY_SECONDS cannot be negative.")
+
+        if self.CBS_SETTLEMENT_POLL_INTERVAL_SECONDS <= 0:
+            always.append("CBS_SETTLEMENT_POLL_INTERVAL_SECONDS must be positive.")
+
         if self.DEBUG:
+            self._raise_if_any(always)
             return
 
-        problems: list[str] = []
+        problems: list[str] = list(always)
+
+        if self.SIMULATED_CBS and not self.ALLOW_SIMULATED_CBS:
+            problems.append(
+                "CBS_MODE=simulated outside DEBUG. Every balance and every "
+                "transfer would be simulated, and nothing in the API says so "
+                "to the person reading it. Set ALLOW_SIMULATED_CBS=true to "
+                "state that this is a sandbox on purpose."
+            )
 
         if self.JWT_SECRET_KEY in _KNOWN_DEFAULT_SECRETS:
             problems.append(
@@ -158,15 +239,22 @@ class Settings:
                 "Check ROUTER_WEIGHT_UPTIME / _LATENCY / _COST."
             )
 
-        if problems:
-            # ASCII only: this message is the last thing printed before the
-            # process dies, and a Windows console (cp1252) mangles anything
-            # else — exactly the failure mode that used to crash startup.
-            raise ConfigurationError(
-                "Refusing to start with an unsafe configuration (DEBUG=false):\n\n"
-                + "\n\n".join(f"  - {p}" for p in problems)
-                + "\n\nSee .env.example for the full variable list.\n"
-            )
+        self._raise_if_any(problems)
+
+    @staticmethod
+    def _raise_if_any(problems: list[str]) -> None:
+        """Abort startup listing every problem found, or return if there are none."""
+        if not problems:
+            return
+
+        # ASCII only: this message is the last thing printed before the
+        # process dies, and a Windows console (cp1252) mangles anything
+        # else — exactly the failure mode that used to crash startup.
+        raise ConfigurationError(
+            "Refusing to start with an unsafe configuration:\n\n"
+            + "\n\n".join(f"  - {p}" for p in problems)
+            + "\n\nSee .env.example for the full variable list.\n"
+        )
 
 
 settings = Settings()

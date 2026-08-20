@@ -2,9 +2,14 @@
 Presentation Layer: Payment Routes — POST /v1/payments/*
 Layer: 🔵 LAYER 4 — Driving Adapters (Presentation)
 
-Payments are persisted to SQLite via PaymentRepository. An in-memory dict
-serves as a fast lookup cache; SQLite is the source of truth and restores
-the cache on server restart (via main.py lifespan).
+Payments are read from and written to the database on every request.
+
+There used to be an in-memory dict in front of it, read first and written on
+each transition. It had to go: settlement now also happens outside the request
+that created the payment — the bank's settlement worker drives it — so a cached
+copy could report ORDERED for a payment the database already had as SUCCESS.
+The same staleness existed between uvicorn workers, where each process held its
+own copy and only one of them ever saw a given update.
 """
 
 from __future__ import annotations
@@ -19,9 +24,6 @@ from sqlalchemy.exc import IntegrityError
 
 router = APIRouter(prefix="/payments", tags=["Payment Initiation (PIS)"])
 _bearer = HTTPBearer()
-
-# In-memory cache — populated from SQLite on startup via main.py lifespan
-_payment_store: dict = {}
 
 
 # ── Request / Response schemas ─────────────────────────────────────────────────
@@ -58,12 +60,24 @@ class PaymentResponse(BaseModel):
     debtor_bank_id: str
     creditor_bank_id: str
     creditor_name: str
+    fee: Decimal = Field(
+        default=Decimal("0.00"),
+        description=(
+            "Fee the debtor's bank collects on top of `amount`. The payer is "
+            "debited `amount + fee`; the beneficiary receives `amount`."
+        ),
+    )
+    total_debited: Decimal = Field(
+        ...,
+        description="What actually leaves the payer's account: amount plus fee.",
+    )
     created_at: datetime
     updated_at: datetime
 
 
 def _payment_to_response(payment) -> PaymentResponse:
     req = payment.initiate_request
+    fee = payment.fee.customer_fee if payment.fee else Decimal("0.00")
     return PaymentResponse(
         payment_id=payment.payment_id,
         status=payment.status.value,
@@ -75,6 +89,8 @@ def _payment_to_response(payment) -> PaymentResponse:
         debtor_bank_id=req.debtor_bank_id,
         creditor_bank_id=req.creditor_bank_id,
         creditor_name=req.creditor_name,
+        fee=fee,
+        total_debited=req.amount + fee,
         created_at=payment.created_at,
         updated_at=payment.updated_at,
     )
@@ -105,7 +121,6 @@ def initiate_payment(
     # Pre-flight idempotency check: if end_to_end_id already exists, return original payment
     existing = repo.get_payment_by_end_to_end_id(req.end_to_end_id)
     if existing:
-        _payment_store[existing.payment_id] = existing
         return _payment_to_response(existing)
 
     try:
@@ -113,14 +128,11 @@ def initiate_payment(
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
-    _payment_store[payment.payment_id] = payment
     try:
         repo.save_payment(payment)
     except IntegrityError:
-        del _payment_store[payment.payment_id]
         existing = repo.get_payment_by_end_to_end_id(req.end_to_end_id)
         if existing:
-            _payment_store[existing.payment_id] = existing
             return _payment_to_response(existing)
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -175,7 +187,6 @@ def order_payment(payment_id: str) -> PaymentResponse:
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
 
-    _payment_store[payment_id] = updated
     repo.update_payment(updated)
     return _payment_to_response(updated)
 
@@ -185,17 +196,10 @@ def order_payment(payment_id: str) -> PaymentResponse:
     response_model=PaymentResponse,
     status_code=status.HTTP_200_OK,
     summary="Get payment status",
-    description="Returns the current lifecycle state of a payment. Falls back to SQLite if not in cache.",
+    description="Returns the current lifecycle state of a payment.",
 )
 def get_payment(payment_id: str) -> PaymentResponse:
-    # Try cache first, then DB
-    payment = _payment_store.get(payment_id)
-    if not payment:
-        from backend.main import get_repo
-        payment = get_repo().get_payment(payment_id)
-    if not payment:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Payment '{payment_id}' not found.")
-    return _payment_to_response(payment)
+    return _payment_to_response(_get_or_404(payment_id))
 
 
 @router.post(
@@ -215,7 +219,6 @@ def cancel_payment(payment_id: str, body: PaymentCancelBody) -> PaymentResponse:
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
 
-    _payment_store[payment_id] = updated
     repo.update_payment(updated)
     return _payment_to_response(updated)
 
@@ -223,12 +226,9 @@ def cancel_payment(payment_id: str, body: PaymentCancelBody) -> PaymentResponse:
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _get_or_404(payment_id: str):
-    payment = _payment_store.get(payment_id)
-    if not payment:
-        from backend.main import get_repo
-        payment = get_repo().get_payment(payment_id)
-        if payment:
-            _payment_store[payment_id] = payment
+    from backend.main import get_repo
+
+    payment = get_repo().get_payment(payment_id)
     if not payment:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Payment '{payment_id}' not found.")
     return payment

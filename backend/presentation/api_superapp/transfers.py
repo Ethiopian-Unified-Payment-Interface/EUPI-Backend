@@ -16,7 +16,6 @@ from backend.domain.models.user import SuperAppUser
 from backend.presentation.api_superapp.auth_deps import get_current_superapp_user
 from backend.presentation.api_v1.payments import (
     PaymentResponse,
-    _payment_store,
     _payment_to_response,
 )
 
@@ -87,9 +86,9 @@ class P2PTransferRequest(BaseModel):
         "**Handle-Based P2P Transfer, authorised by the sender's PIN**\n\n"
         "Resolves the recipient by username, takes the sender's default *sending* "
         "account and the recipient's default *receiving* account, checks the "
-        "balance, and runs the full PIS lifecycle — so the payment is submitted "
-        "to the bank by the time this returns, in `ORDERED` status awaiting the "
-        "bank's settlement callback.\n\n"
+        "balance, and runs the full PIS lifecycle — so the payment is settled "
+        "by the time this returns, in `SUCCESS` status, with the sender "
+        "debited and the recipient credited.\n\n"
         "The `pin` field is required and is the payer's consent. The PIN is "
         "verified against the same argon2 hash and lockout counters as login, "
         "and a short-lived consent token derived from it drives the PIS flow. A "
@@ -103,6 +102,9 @@ def initiate_transfer(
     body: P2PTransferRequest,
     current_user: SuperAppUser = Depends(get_current_superapp_user),
 ) -> PaymentResponse:
+    from backend.application.use_cases.superapp_transfer_service import (
+        InsufficientBalanceError,
+    )
     from backend.application.use_cases.user_registration_service import (
         InvalidPINError,
         PINLockedError,
@@ -126,10 +128,14 @@ def initiate_transfer(
     # at the bank. A double-tapped button would therefore send the money twice
     # and merely fail to record the second. Returning the original payment here
     # is what actually makes a retry safe.
+    #
+    # An ORDERED original is a crash between the bank posting and EUPI
+    # recording SUCCESS. Completing settlement on retry repairs it rather than
+    # handing the caller a pending transfer they cannot finish.
     if body.client_reference:
         existing = repo.get_payment_by_end_to_end_id(f"P2P-REF-{body.client_reference}")
         if existing is not None:
-            return _payment_to_response(existing)
+            return _payment_to_response(service.finalise_existing(existing))
 
     try:
         payment = service.send_money(
@@ -149,10 +155,15 @@ def initiate_transfer(
         )
     except InvalidPINError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
+    except InsufficientBalanceError as exc:
+        # 402 rather than 400: the request was well formed and authorised, and
+        # the client should show "not enough money", not "bad request".
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED, detail=str(exc)
+        )
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
-    _payment_store[payment.payment_id] = payment
     repo.save_payment(payment)
 
     return _payment_to_response(payment)

@@ -17,7 +17,9 @@ Run:  py -m pytest tests/test_e2e_superapp_p2p.py -v
 
 from __future__ import annotations
 
+import os
 import uuid
+from decimal import Decimal
 from typing import Any, Iterator
 
 import pytest
@@ -169,10 +171,28 @@ def accounts_of(client: TestClient, token: str) -> list[dict[str, Any]]:
     return response.json()
 
 
+def available_balance(
+    accounts: list[dict[str, Any]], bank_id: str, account_number: str
+) -> Decimal:
+    """Live CBS balance of one linked account, as the Super App would show it."""
+    row = next(
+        a
+        for a in accounts
+        if a["bank_id"] == bank_id and a["account_number"] == account_number
+    )
+    return Decimal(str(row["available_balance"]))
+
+
 def admin_token(client: TestClient) -> str:
+    # Read the bootstrap credentials rather than repeating them: conftest sets
+    # them with setdefault, so a developer with either already exported in their
+    # shell would otherwise fail this login against a differently-seeded admin.
     response = client.post(
         "/v1/admin/auth/login",
-        json={"email": "admin@kifiya.com", "password": "ChangeMe!Dev123"},
+        json={
+            "email": os.environ["ADMIN_BOOTSTRAP_EMAIL"],
+            "password": os.environ["ADMIN_BOOTSTRAP_PASSWORD"],
+        },
     )
     assert response.status_code == 200, response.text
     return response.json()["access_token"]
@@ -526,6 +546,62 @@ class TestHandleBasedTransfer:
             "Moving the sender's default SENDING account must reroute the debit"
         )
 
+    def test_debit_hits_the_senders_bank_not_the_routed_rail(
+        self, client: TestClient, parties: dict[str, Any]
+    ) -> None:
+        """
+        The catalogue reuses account numbers across banks. Ordering through
+        the Smart Router's selected rail — which is often CBE — therefore
+        used to debit CBE's copy of the number and leave the sender's real
+        COOP account untouched. The Super App then showed SUCCESS, a credit
+        on the recipient, and no debit on the payer.
+        """
+        import backend.main as main_module
+        from backend.domain.models.account import BankID
+
+        sender_token = parties["sender_token"]
+        set_default(
+            client, ABEBE, sender_token,
+            next(a for a in accounts_of(client, sender_token) if a["bank_id"] == "COOP")["link_id"],
+            "SENDING",
+        )
+
+        engine = main_module.get_cbs_engine()
+        coop_before = engine.get_account(BankID.COOP, ABEBE["coop_account"]).available_balance
+        rail_shadow_before = engine.get_account(
+            BankID.CBE, ABEBE["coop_account"]
+        ).available_balance
+
+        response = client.post(
+            "/v1/superapp/transfers",
+            headers=auth(sender_token),
+            json={
+                "sender_username": ABEBE["username"],
+                "recipient_username": SELAM["username"],
+                "amount": 40.00,
+                "pin": ABEBE["pin"],
+            },
+        )
+        assert response.status_code in (200, 201), response.text
+        body = response.json()
+        assert body["status"] == "SUCCESS", body
+        assert body["debtor_bank_id"] == "COOP"
+
+        total_debited = Decimal(str(body["total_debited"]))
+        coop_after = engine.get_account(BankID.COOP, ABEBE["coop_account"]).available_balance
+        rail_shadow_after = engine.get_account(
+            BankID.CBE, ABEBE["coop_account"]
+        ).available_balance
+
+        assert coop_before - coop_after == total_debited, (
+            f"Sender's COOP account should fall by {total_debited}, "
+            f"fell by {coop_before - coop_after}"
+        )
+        assert rail_shadow_after == rail_shadow_before, (
+            "The routed rail must not debit another bank's copy of the "
+            "same account number"
+        )
+
     def test_intra_bank_when_both_defaults_are_the_same_bank(
         self, client: TestClient, parties: dict[str, Any]
     ) -> None:
@@ -611,28 +687,81 @@ class TestHandleBasedTransfer:
         ).json()["total"]
         assert after == before, "A rejected PIN must not create a payment"
 
-    def test_pin_authorised_transfer_is_submitted_not_left_pending(
+    def test_pin_authorised_transfer_debits_sender_and_credits_recipient(
         self, client: TestClient, parties: dict[str, Any]
     ) -> None:
         """
-        The gap this closed: the app used to create a PENDING payment it had no
-        way to authorise, so transfers never reached the bank.
+        The gap this closed: a PIN-authorised P2P used to stop at ORDERED,
+        which the Super App renders as pending, and never posted the debit
+        or the credit. A completed transfer must move money on both books
+        and return SUCCESS in the same request.
         """
+        sender_before = available_balance(
+            accounts_of(client, parties["sender_token"]),
+            "CBE",
+            ABEBE["cbe_account"],
+        )
+        recipient_before = available_balance(
+            accounts_of(client, parties["recipient_token"]),
+            "COOP",
+            SELAM["coop_account"],
+        )
+
+        amount = Decimal("25.00")
         response = client.post(
             "/v1/superapp/transfers",
             headers=auth(parties["sender_token"]),
             json={
                 "sender_username": ABEBE["username"],
                 "recipient_username": SELAM["username"],
-                "amount": 25.00,
+                "amount": float(amount),
                 "pin": ABEBE["pin"],
             },
         )
         assert response.status_code in (200, 201), response.text
-        assert response.json()["status"] == "ORDERED", (
-            "A PIN-authorised transfer must be submitted to the bank, not left "
-            f"in {response.json()['status']}"
+        body = response.json()
+        assert body["status"] == "SUCCESS", (
+            "A PIN-authorised transfer must complete — debit the sender and "
+            f"credit the recipient — not remain {body['status']}"
         )
+
+        total_debited = Decimal(str(body["total_debited"]))
+        sender_after = available_balance(
+            accounts_of(client, parties["sender_token"]),
+            "CBE",
+            ABEBE["cbe_account"],
+        )
+        recipient_after = available_balance(
+            accounts_of(client, parties["recipient_token"]),
+            "COOP",
+            SELAM["coop_account"],
+        )
+
+        assert sender_before - sender_after == total_debited, (
+            f"Sender CBE balance should fall by {total_debited}, "
+            f"fell by {sender_before - sender_after}"
+        )
+        assert recipient_after - recipient_before == amount, (
+            f"Recipient COOP balance should rise by {amount}, "
+            f"rose by {recipient_after - recipient_before}"
+        )
+
+        sender_history = client.get(
+            "/v1/superapp/transactions", headers=auth(parties["sender_token"])
+        ).json()["transactions"]
+        recipient_history = client.get(
+            "/v1/superapp/transactions", headers=auth(parties["recipient_token"])
+        ).json()["transactions"]
+        matching_out = [
+            t for t in sender_history if t["payment_id"] == body["payment_id"]
+        ]
+        matching_in = [
+            t for t in recipient_history if t["payment_id"] == body["payment_id"]
+        ]
+        assert matching_out and matching_out[0]["status"] == "SUCCESS"
+        assert matching_out[0]["is_credit"] is False
+        assert matching_in and matching_in[0]["status"] == "SUCCESS"
+        assert matching_in[0]["is_credit"] is True
 
     def test_repeating_a_client_reference_does_not_send_twice(
         self, client: TestClient, parties: dict[str, Any]
@@ -811,10 +940,10 @@ class TestSettlementAndLedger:
         assert created.status_code in (200, 201), created.text
         payment_id = created.json()["payment_id"]
 
-        # The transfer is already ORDERED — the PIN authorised it and the
-        # server ran verify and order. Only the bank's callback remains.
-        assert created.json()["status"] == "ORDERED", created.text
-        settle(client, payment_id)
+        # The PIN authorised it, the bank posted the debit and credit, and
+        # EUPI recorded SUCCESS in the same request. A callback is no longer
+        # required to make the ledger exist.
+        assert created.json()["status"] == "SUCCESS", created.text
 
         entries = client.get(
             f"/v1/admin/ledger/payments/{payment_id}/entries",

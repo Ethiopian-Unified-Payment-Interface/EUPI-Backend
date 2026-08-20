@@ -225,16 +225,17 @@ r_trf = req("POST", "/v1/superapp/transfers", {
     "remittance_info": "E2E Master Test Transfer",
     "pin": "123456",
 }, token=sender_session_token)
-check("P2P Transfer successfully ordered with PIN", r_trf.get("status") == "ORDERED", str(r_trf))
+check("P2P Transfer completed with PIN (SUCCESS)", r_trf.get("status") == "SUCCESS", str(r_trf))
 p2p_payment_id = r_trf.get("payment_id", "")
 
-# Bank callback settlement
+# Idempotent settlement — already SUCCESS from the Super App path; a
+# repeated bank callback must not rewrite the outcome.
 r_cb = req("POST", "/v1/callbacks", {
     "payment_id": p2p_payment_id,
     "bank_order_reference": r_trf.get("bank_order_reference") or "CBS-TEST-REF",
     "confirmed": True,
 })
-check("Payment settled to SUCCESS via bank callback", r_cb.get("final_status") == "SUCCESS", str(r_cb))
+check("Repeated settlement callback is idempotent SUCCESS", r_cb.get("final_status") == "SUCCESS", str(r_cb))
 
 # ── 8. Core Open Banking PIS 4-Step Flow ──
 print("\n── 8. Core Open Banking PIS 4-Step Flow ──")

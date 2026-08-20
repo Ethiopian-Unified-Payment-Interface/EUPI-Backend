@@ -19,6 +19,37 @@ from backend.domain.models.account import Account, BankID
 from backend.domain.models.transaction import Transaction
 
 
+class BankError(Exception):
+    """
+    Base class for every failure a bank rail can report.
+
+    These live beside the port rather than inside an adapter because they are
+    part of the contract: a use case must be able to tell "this account has no
+    money" from "this bank is unreachable" without importing infrastructure and
+    inverting the dependency the port exists to enforce.
+    """
+
+
+class AccountNotFoundError(BankError):
+    """The account does not exist at this bank."""
+
+
+class InactiveAccountError(BankError):
+    """The account exists but is dormant, frozen, or closed."""
+
+
+class InsufficientFundsError(BankError):
+    """The debtor account cannot cover the debit."""
+
+
+class DuplicateTransferError(BankError):
+    """This `end_to_end_id` has already been submitted to this bank."""
+
+
+class BankConnectionError(BankError):
+    """The bank's core banking system is unreachable or timed out."""
+
+
 class BankPort(ABC):
     """
     Abstract Driven Port: Banking Rail Interface.
@@ -48,7 +79,7 @@ class BankPort(ABC):
             A fully populated :class:`~domain.models.account.Account` domain object.
 
         Raises:
-            AccountNotFoundException: If the account does not exist at this bank.
+            AccountNotFoundError: If the account does not exist at this bank.
             BankConnectionError: If the bank CBS is temporarily unavailable.
         """
         ...
@@ -77,7 +108,7 @@ class BankPort(ABC):
             ordered by booking_date descending (newest first).
 
         Raises:
-            AccountNotFoundException: If the account does not exist.
+            AccountNotFoundError: If the account does not exist.
             BankConnectionError: If the bank CBS is temporarily unavailable.
         """
         ...
@@ -96,6 +127,7 @@ class BankPort(ABC):
         currency: str,
         end_to_end_id: str,
         remittance_info: str | None = None,
+        fee_amount: Decimal | None = None,
     ) -> str:
         """
         Initiate an inter-bank or intra-bank fund transfer.
@@ -104,23 +136,31 @@ class BankPort(ABC):
         The adapter submits the debit instruction to the bank's CBS and returns
         the bank's own order reference number.
 
+        The debit is `amount + fee_amount`; the credit is `amount`. The bank
+        collects the fee from its own customer and later settles EUPI's share
+        of it, which is why the two figures are separate rather than one total.
+
         Args:
             debtor_account:   Source account number at this bank.
             creditor_account: Destination account number.
             creditor_bank_id: Destination bank rail identifier.
-            amount:           Transfer amount (always positive).
+            amount:           Transfer amount reaching the beneficiary (positive).
             currency:         ISO 4217 currency code (typically "ETB").
-            end_to_end_id:    Unique reference from the initiating TPP.
+            end_to_end_id:    Unique reference from the initiating TPP. Submitting
+                              it twice must not move money twice.
             remittance_info:  Optional payment narration / invoice reference.
+            fee_amount:       Fee the bank collects from the debtor on top of
+                              `amount`. None or zero means no fee.
 
         Returns:
             A bank-issued order reference string for audit and reconciliation.
 
         Raises:
-            InsufficientFundsError:   If the debtor account has insufficient balance.
-            InvalidAccountError:      If either account is inactive or invalid.
-            BankConnectionError:      If the bank CBS is temporarily unavailable.
-            DuplicatePaymentError:    If end_to_end_id has already been processed.
+            InsufficientFundsError: If the debtor cannot cover amount plus fee.
+            AccountNotFoundError:   If either account is unknown to its bank.
+            InactiveAccountError:   If either account is not open for business.
+            DuplicateTransferError: If end_to_end_id has already been processed.
+            BankConnectionError:    If the bank CBS is temporarily unavailable.
         """
         ...
 

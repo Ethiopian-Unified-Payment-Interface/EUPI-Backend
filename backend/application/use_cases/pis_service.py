@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     # between use-case modules.
     from backend.application.use_cases.fee_service import FeeService
     from backend.application.use_cases.ledger_service import LedgerService
+    from backend.domain.models.fee import FeeQuote
 
 # Domain imports only
 from backend.domain.models.account import BankID
@@ -158,6 +159,7 @@ class PISService:
             status=PaymentStatus.PENDING,
             initiate_request=request,
             selected_rail=selected_rail,
+            fee=self._quote_fee(request),
             webhook_url=webhook_url,
             created_at=datetime.now(tz=timezone.utc),
             updated_at=datetime.now(tz=timezone.utc),
@@ -283,21 +285,29 @@ class PISService:
                 f"Payment {payment.payment_id} has no selected_rail; cannot ORDER."
             )
 
-        # Map PaymentRail → BankID to look up the adapter.
+        req = payment.initiate_request
+
+        # Submit the debit to the bank that actually holds the debtor account.
+        #
+        # `selected_rail` is a routing choice — which network would carry this
+        # in production. It is not the books to debit. Calling that rail's
+        # adapter here posted the debit onto a *different bank's copy* of the
+        # same account number (the catalogue reuses numbers across banks), so a
+        # COOP→COOP Super App transfer routed via CBE left the sender's COOP
+        # balance untouched and drained an unrelated CBE fixture instead.
         try:
-            bank_id = BankID(payment.selected_rail.value)
+            originating_bank = BankID(req.debtor_bank_id)
         except ValueError:
             raise BankNotRegisteredError(
-                f"Selected rail '{payment.selected_rail.value}' has no matching BankID."
+                f"Debtor bank '{req.debtor_bank_id}' has no matching BankID."
             )
 
-        port = self._bank_ports.get(bank_id)
+        port = self._bank_ports.get(originating_bank)
         if port is None:
             raise BankNotRegisteredError(
-                f"Bank adapter for rail '{bank_id.value}' is not registered."
+                f"Bank adapter for debtor bank '{originating_bank.value}' is not registered."
             )
 
-        req = payment.initiate_request
         try:
             bank_reference = port.transfer(
                 debtor_account=req.debtor_account_number,
@@ -307,6 +317,11 @@ class PISService:
                 currency=req.currency,
                 end_to_end_id=req.end_to_end_id,
                 remittance_info=req.remittance_info,
+                # The fee quoted at initiation, not a fresh one. The customer
+                # authorised this figure and the bank debits it alongside the
+                # principal, so re-quoting here could charge a price nobody
+                # agreed to.
+                fee_amount=payment.fee.customer_fee if payment.fee else None,
             )
 
             ordered_payment = payment.model_copy(
@@ -321,7 +336,8 @@ class PISService:
                 "PIS Step 3 — Payment ordered",
                 extra={
                     "payment_id": payment.payment_id,
-                    "bank_id": bank_id.value,
+                    "debtor_bank": originating_bank.value,
+                    "selected_rail": payment.selected_rail.value if payment.selected_rail else None,
                     "bank_reference": bank_reference,
                 },
             )
@@ -341,7 +357,7 @@ class PISService:
                 "PIS Step 3 — Payment ORDER failed",
                 extra={
                     "payment_id": payment.payment_id,
-                    "bank_id": bank_id.value,
+                    "debtor_bank": originating_bank.value,
                     "reason": str(exc),
                 },
             )
@@ -417,12 +433,60 @@ class PISService:
     # Ledger integration
     # ------------------------------------------------------------------
 
+    def _quote_fee(self, request: PaymentInitiateRequest) -> "FeeQuote | None":
+        """
+        Price a payment at initiation, before anyone authorises it.
+
+        Pricing has to happen here rather than at settlement because the fee is
+        debited from the payer alongside the principal: a figure produced after
+        the money moved cannot be the figure that moved it, and a rule
+        published in between would leave the ledger describing a different
+        transaction than the bank performed.
+
+        Priced against the **debtor's** bank, not the routed rail. Under
+        revenue share the customer's own bank collects the fee and owes EUPI a
+        share, so the receivable belongs to that bank. `selected_rail` is a
+        routing artifact; using it books revenue against a bank that never
+        charged anyone, which is what once made COOP->COOP payments accrue
+        against CBE and split volume from revenue in the reconciliation report.
+
+        Args:
+            request: The initiation payload.
+
+        Returns:
+            The quote, or None when no fee engine is configured. Failures are
+            swallowed: an unpriced payment is a revenue problem, a payment
+            blocked because pricing was unavailable is a customer problem, and
+            the second is worse.
+        """
+        if self._fee_service is None:
+            return None
+
+        from backend.domain.models.ledger import TransactionType
+
+        try:
+            return self._fee_service.quote(
+                bank_id=request.debtor_bank_id,
+                transaction_type=TransactionType.classify(
+                    request.debtor_bank_id, request.creditor_bank_id
+                ),
+                amount=request.amount,
+                currency=request.currency,
+            )
+        except Exception:  # noqa: BLE001 — see docstring
+            logger.exception(
+                "Could not price payment; continuing unpriced.",
+                extra={"end_to_end_id": request.end_to_end_id},
+            )
+            return None
+
     def _record_in_ledger(self, payment: Payment) -> None:
         """
-        Price a settled payment and post its double-entry records.
+        Post the double-entry records for a settled payment.
 
         Called only on the SUCCESS path — a failed payment moved no money and
-        must not appear in the ledger.
+        must not appear in the ledger. The fee posted is the one recorded on
+        the payment at initiation, which is the one the bank actually debited.
 
         Failures here are logged, not raised. The money has already moved at
         the bank by this point; refusing the callback would leave the payment
@@ -439,33 +503,6 @@ class PISService:
         request = payment.initiate_request
 
         try:
-            fee_quote = None
-            if self._fee_service is not None:
-                from backend.domain.models.ledger import TransactionType
-
-                transaction_type = TransactionType.classify(
-                    request.debtor_bank_id, request.creditor_bank_id
-                )
-                # Price against the DEBTOR's bank, not the routed rail.
-                #
-                # Under revenue share the customer's own bank collects the fee
-                # and owes EUPI a share of it, so the receivable belongs to
-                # that bank. `selected_rail` is a routing artifact — which rail
-                # carried the transfer — and using it books the receivable
-                # against a bank that never charged anyone. That produced
-                # COOP->COOP payments accruing revenue against CBE, which the
-                # reconciliation report surfaced as volume and revenue landing
-                # on different banks.
-                #
-                # It also makes pricing correct: a negotiated rate with COOP
-                # should apply to COOP's customers regardless of routing.
-                fee_quote = self._fee_service.quote(
-                    bank_id=request.debtor_bank_id,
-                    transaction_type=transaction_type,
-                    amount=request.amount,
-                    currency=request.currency,
-                )
-
             self._ledger_service.record_settled_payment(
                 payment_id=payment.payment_id,
                 debtor_bank_id=request.debtor_bank_id,
@@ -474,7 +511,7 @@ class PISService:
                 creditor_account_number=request.creditor_account_number,
                 amount=request.amount,
                 currency=request.currency,
-                fee_quote=fee_quote,
+                fee_quote=payment.fee,
             )
         except Exception:  # noqa: BLE001 — see docstring
             logger.exception(

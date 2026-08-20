@@ -16,6 +16,8 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from backend.domain.models.fee import FeeQuote
+
 
 class PaymentStatus(str, Enum):
     """
@@ -131,6 +133,16 @@ class Payment(BaseModel):
     consent_token: Optional[str] = Field(
         default=None,
         description="Opaque Fayda consent token issued after OTP verification.",
+    )
+    fee: Optional[FeeQuote] = Field(
+        default=None,
+        description=(
+            "Pricing fixed at initiation. The bank debits the customer "
+            "`amount + fee.customer_fee`, so the quote has to be settled on "
+            "before the payer authorises and has to survive unchanged to "
+            "settlement — re-pricing later would let a rule published in the "
+            "meantime make the ledger disagree with the money that moved."
+        ),
     )
     bank_order_reference: Optional[str] = Field(
         default=None,

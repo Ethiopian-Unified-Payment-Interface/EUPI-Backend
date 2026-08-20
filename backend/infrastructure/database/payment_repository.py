@@ -23,6 +23,8 @@ from typing import Generator
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from backend.domain.models.fee import FeeQuote
+from backend.domain.models.ledger import TransactionType
 from backend.domain.models.payment import (
     Payment,
     PaymentInitiateRequest,
@@ -74,6 +76,11 @@ class PaymentRepository(RepositoryBase):
             currency=req.currency,
             end_to_end_id=req.end_to_end_id,
             remittance_info=req.remittance_info,
+            customer_fee=payment.fee.customer_fee if payment.fee else None,
+            eupi_revenue=payment.fee.eupi_revenue if payment.fee else None,
+            fee_rule_id=payment.fee.rule_id if payment.fee else None,
+            fee_rule_version=payment.fee.rule_version if payment.fee else None,
+            fee_bank_id=payment.fee.bank_id if payment.fee else None,
             created_at=payment.created_at.replace(tzinfo=None),  # stored naive-UTC; see session.py
             updated_at=payment.updated_at.replace(tzinfo=None),
         )
@@ -182,10 +189,36 @@ class PaymentRepository(RepositoryBase):
             selected_rail=PaymentRail(record.selected_rail) if record.selected_rail else None,
             bank_order_reference=record.bank_order_reference,
             consent_token=record.consent_token,
+            fee=self._record_to_fee_quote(record),
             failure_reason=record.failure_reason,
             webhook_url=record.webhook_url,
             created_at=record.created_at.replace(tzinfo=timezone.utc),
             updated_at=record.updated_at.replace(tzinfo=timezone.utc),
+        )
+
+    @staticmethod
+    def _record_to_fee_quote(record: PaymentRecord) -> FeeQuote | None:
+        """
+        Rebuild the quote that priced this payment, if it was priced.
+
+        `transaction_type` is reclassified from the two bank identifiers rather
+        than stored: it is a pure function of them, and a stored copy could
+        only ever disagree. Payments created before pricing moved to initiation
+        have no quote and return None.
+        """
+        if record.customer_fee is None or record.fee_rule_id is None:
+            return None
+
+        return FeeQuote(
+            customer_fee=Decimal(str(record.customer_fee)),
+            eupi_revenue=Decimal(str(record.eupi_revenue or 0)),
+            currency=record.currency,
+            transaction_type=TransactionType.classify(
+                record.debtor_bank_id, record.creditor_bank_id
+            ),
+            rule_id=record.fee_rule_id,
+            rule_version=record.fee_rule_version or 1,
+            bank_id=record.fee_bank_id or record.debtor_bank_id,
         )
 
     # ══════════════════════════════════════════════════════════════════════════

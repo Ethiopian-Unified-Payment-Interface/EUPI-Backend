@@ -24,6 +24,10 @@ SQLite needs `check_same_thread=False` because FastAPI serves requests from a
 thread pool, and it ignores pool sizing because it is a file, not a server.
 Postgres needs neither and wants real pool configuration. Both are handled here
 so no caller has to care which one is behind the URL.
+
+SQLite also needs its transactions to start as writers — see
+`_configure_sqlite_locking`. Without that, a read-modify-write on a balance can
+lose an update, and no amount of care in the calling code can prevent it.
 """
 
 from __future__ import annotations
@@ -32,7 +36,7 @@ import logging
 from contextlib import contextmanager
 from typing import Any, Generator
 
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, event, inspect
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -66,7 +70,48 @@ class Database:
             # session and raises DetachedInstanceError.
             expire_on_commit=False,
         )
+        if self.dialect == "sqlite":
+            self._configure_sqlite_locking()
         logger.info("Database initialised (%s)", self.dialect)
+
+    def _configure_sqlite_locking(self) -> None:
+        """
+        Make every SQLite transaction acquire the write lock up front.
+
+        SQLite has no `SELECT ... FOR UPDATE`. Its default deferred transaction
+        takes a read lock first and only upgrades on the first write, so two
+        transactions can both read a balance, both compute a new one from the
+        same starting figure, and the second commit silently discards the
+        first. That is a lost update, and it is how a simulated account gets
+        debited once for two transfers.
+
+        Beginning IMMEDIATE serialises writers at the point they start rather
+        than at the point they write, which restores the read-modify-write
+        exclusivity that the engine's locking assumes. It costs concurrency,
+        which is the correct trade for a file-backed database that is only ever
+        used for development and demos; Postgres uses row locks instead and is
+        untouched by this.
+
+        `busy_timeout` makes a contending transaction wait for the lock rather
+        than fail immediately, which is what turns serialisation into something
+        callers never notice.
+        """
+
+        @event.listens_for(self._engine, "connect")
+        def _on_connect(dbapi_connection, _record) -> None:  # noqa: ANN001
+            # Hand control of BEGIN to us; pysqlite's implicit handling cannot
+            # express IMMEDIATE.
+            dbapi_connection.isolation_level = None
+            cursor = dbapi_connection.cursor()
+            try:
+                cursor.execute("PRAGMA busy_timeout = 10000")
+                cursor.execute("PRAGMA foreign_keys = ON")
+            finally:
+                cursor.close()
+
+        @event.listens_for(self._engine, "begin")
+        def _on_begin(connection) -> None:  # noqa: ANN001
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
 
     @staticmethod
     def _engine_options(url: str) -> dict[str, Any]:

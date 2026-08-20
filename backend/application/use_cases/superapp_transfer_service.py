@@ -26,15 +26,19 @@ if TYPE_CHECKING:
 
 # Domain imports only
 from backend.domain.models.linked_account import LinkedAccount
-from backend.domain.models.payment import Payment, PaymentInitiateRequest
+from backend.domain.models.payment import Payment, PaymentInitiateRequest, PaymentStatus
 
 # Application-layer port contracts only — never concrete adapters
 from backend.application.ports.account_link_repository_port import (
     AccountLinkRepositoryPort,
 )
+from backend.application.ports.payment_repository_port import PaymentRepositoryPort
 from backend.application.ports.user_repository_port import UserRepositoryPort
 
-# Compose with existing use-case orchestrator (same layer — allowed)
+# Compose with existing use-case orchestrators (same layer — allowed)
+from backend.application.use_cases.payment_settlement_service import (
+    PaymentSettlementService,
+)
 from backend.application.use_cases.pis_service import PISService
 
 logger = logging.getLogger(__name__)
@@ -48,9 +52,12 @@ class SuperAppTransferService:
     resolution to provide a username-based "send money" flow.
 
     Injected dependencies:
-      - user_repo: UserRepositoryPort for username resolution.
-      - link_repo: AccountLinkRepositoryPort for default account lookup.
-      - pis_service: PISService for payment execution.
+      - user_repo:            Username resolution.
+      - link_repo:            Default account lookup.
+      - pis_service:          Payment execution through the PIS lifecycle.
+      - payment_repo:         Persistence required before settlement can load
+                              the payment it is about to finalise.
+      - settlement_service:   Drives ORDERED → SUCCESS after the bank posts.
     """
 
     # Consent minted for a transfer authorises exactly that transfer. Two
@@ -65,6 +72,8 @@ class SuperAppTransferService:
         pis_service: PISService,
         identity_port: "IdentityPort | None" = None,
         registration_service: "UserRegistrationService | None" = None,
+        payment_repo: PaymentRepositoryPort | None = None,
+        settlement_service: PaymentSettlementService | None = None,
     ) -> None:
         """
         Args:
@@ -76,12 +85,18 @@ class SuperAppTransferService:
             registration_service: Verifies the transaction PIN, reusing the
                                   same argon2 hash and lockout counters as
                                   login. Required by `send_money`.
+            payment_repo:         Persistence for the ordered payment.
+                                  Required by `send_money`.
+            settlement_service:   Completes the payment after the bank posts.
+                                  Required by `send_money`.
         """
         self._user_repo = user_repo
         self._link_repo = link_repo
         self._pis_service = pis_service
         self._identity_port = identity_port
         self._registration_service = registration_service
+        self._payment_repo = payment_repo
+        self._settlement_service = settlement_service
 
     def send_money(
         self,
@@ -98,13 +113,17 @@ class SuperAppTransferService:
 
         The Super App transaction PIN is the payer's consent. Verifying it mints
         a short-lived consent token, which then drives the ordinary PIS flow —
-        initiate → verify → order — so the payment is fully submitted to the
-        bank when this returns, rather than left PENDING for a caller that has
-        no way to authorise it.
+        initiate → verify → order — and, because the bank adapter already
+        posted the debit and credit, settlement. The caller observes a
+        completed payment, not an ORDERED one the Super App would render as
+        pending forever.
 
         Why this exists: PIS VERIFY requires a `gateway_access` token, and a
         Super App session token is deliberately not interchangeable with one.
         Without this path the app could create a payment and never complete it.
+        Stopping at ORDERED was the next gap: money had moved at the bank but
+        EUPI never recorded SUCCESS, so neither history nor the ledger showed
+        a credit and a debit.
 
         Args:
             sender_username:    The payer, from their session.
@@ -120,7 +139,8 @@ class SuperAppTransferService:
                                 the unique constraint instead of sending twice.
 
         Returns:
-            The Payment in ORDERED status, awaiting the bank's callback.
+            The Payment in SUCCESS status once both accounts have moved, or
+            FAILED if the bank rejected the order.
 
         Raises:
             InvalidPINError / PINLockedError: PIN wrong, or too many attempts.
@@ -131,6 +151,11 @@ class SuperAppTransferService:
             raise TransferError(
                 "PIN-authorised transfers are unavailable: the transfer service "
                 "was constructed without an identity port or registration service."
+            )
+        if self._payment_repo is None or self._settlement_service is None:
+            raise TransferError(
+                "PIN-authorised transfers are unavailable: the transfer service "
+                "was constructed without a payment repository or settlement service."
             )
 
         # 1. Authorise. Raises before anything is created if the PIN is wrong,
@@ -159,19 +184,39 @@ class SuperAppTransferService:
             ttl_seconds=self._CONSENT_TTL_SECONDS,
         )
 
-        # 4. Run the rest of the PIS lifecycle.
+        # 4. Run the rest of the PIS lifecycle, then record the bank's result.
         verified = self._pis_service.verify_payment(payment, consent_token)
         ordered = self._pis_service.order_payment(verified)
+        final = self._record_bank_result(ordered)
 
         logger.info(
-            "P2P transfer authorised by PIN and submitted",
+            "P2P transfer authorised by PIN and completed",
             extra={
-                "payment_id": ordered.payment_id,
+                "payment_id": final.payment_id,
                 "consent_method": "superapp_pin",
-                "status": ordered.status.value,
+                "status": final.status.value,
             },
         )
-        return ordered
+        return final
+
+    def finalise_existing(self, payment: Payment) -> Payment:
+        """
+        Complete an already-created transfer that never reached SUCCESS.
+
+        Used when a retried `client_reference` finds the original payment.
+        ORDERED means the bank posted and EUPI did not record it; confirming
+        now repairs the gap. Any other status is returned unchanged — a
+        SUCCESS replay is a no-op, a FAILED one must not be revived.
+        """
+        if payment.status is not PaymentStatus.ORDERED:
+            return payment
+        if self._settlement_service is None:
+            return payment
+        return self._settlement_service.settle(
+            payment_id=payment.payment_id,
+            bank_confirmed=True,
+            bank_order_reference=payment.bank_order_reference,
+        )
 
     def initiate_transfer(
         self,
@@ -232,21 +277,6 @@ class SuperAppTransferService:
                 f"Recipient '{recipient_username}' has no default receiving account."
             )
 
-        # Check sender's available balance at their default sending bank
-        port = self._pis_service._bank_ports.get(sender_account.bank_id)
-        if port is not None:
-            try:
-                acct = port.get_balance(sender_account.account_number)
-                if acct.available_balance < amount:
-                    raise InsufficientBalanceError(
-                        f"Insufficient funds in default sending account '{sender_account.account_number}' "
-                        f"at {sender_account.bank_id.value}. Available: {acct.available_balance} ETB, Requested: {amount} ETB."
-                    )
-            except InsufficientBalanceError:
-                raise
-            except Exception as exc:
-                logger.warning(f"Could not verify balance prior to transfer: {exc}")
-
         # Build the PIS request
         request = PaymentInitiateRequest(
             debtor_account_number=sender_account.account_number,
@@ -275,6 +305,14 @@ class SuperAppTransferService:
 
         payment = self._pis_service.initiate_payment(request=request)
 
+        # Advisory affordability check. The bank is the authority and re-checks
+        # atomically when the order is placed; this only exists so the app can
+        # say "not enough money" before we ask the payer for their PIN, and it
+        # must therefore price the whole debit — principal plus the fee the
+        # bank collects — not the principal alone.
+        fee = payment.fee.customer_fee if payment.fee else Decimal("0.00")
+        self._assert_can_afford(sender_account, amount + fee)
+
         logger.info(
             "P2P transfer initiated",
             extra={
@@ -288,6 +326,76 @@ class SuperAppTransferService:
         return payment
 
     # Private helpers
+
+    def _assert_can_afford(self, account: LinkedAccount, total_debit: Decimal) -> None:
+        """
+        Raise InsufficientBalanceError if the account clearly cannot cover
+        `total_debit` (principal + fee).
+
+        Advisory only. A balance read is a snapshot, so this can be beaten by a
+        concurrent debit; the bank re-checks under a row lock when the order is
+        placed and is the one that decides. Any failure to *read* the balance is
+        therefore logged and swallowed rather than blocking the transfer — the
+        exception is a missing or closed account, which is a definite "this will
+        never work" and is worth surfacing here.
+        """
+        from backend.application.ports.bank_port import (
+            AccountNotFoundError,
+            InactiveAccountError,
+        )
+
+        port = self._pis_service._bank_ports.get(account.bank_id)
+        if port is None:
+            return
+
+        try:
+            snapshot = port.get_balance(account.account_number)
+        except (AccountNotFoundError, InactiveAccountError) as exc:
+            raise TransferError(
+                f"Your default sending account at {account.bank_id.value} is not "
+                f"usable: {exc}"
+            ) from exc
+        except Exception as exc:
+            logger.warning(
+                "Could not verify balance prior to transfer; deferring to the bank",
+                extra={"bank_id": account.bank_id.value, "error": str(exc)},
+            )
+            return
+
+        if snapshot.available_balance < total_debit:
+            raise InsufficientBalanceError(
+                f"Insufficient funds in default sending account "
+                f"'{account.account_number}' at {account.bank_id.value}. "
+                f"Available: {snapshot.available_balance} ETB, "
+                f"required: {total_debit} ETB (including fees)."
+            )
+
+    def _record_bank_result(self, payment: Payment) -> Payment:
+        """
+        Persist the bank's decision and, when it accepted, complete settlement.
+
+        `order_payment` already moved money on the simulated books — debit
+        the sender, credit the recipient, collect the fee. Leaving the
+        payment ORDERED waits for an external callback the Super App never
+        fires; the settlement worker eventually would, but until then the
+        history shows pending and the EUPI ledger has no entry. Confirming
+        here is not a shortcut around the bank: the bank already posted.
+        The worker remains for TPP payments that stop at ORDER, and a
+        repeated confirmation is a no-op because settlement is idempotent.
+        """
+        assert self._payment_repo is not None
+        assert self._settlement_service is not None
+
+        self._payment_repo.update_payment(payment)
+
+        if payment.status is not PaymentStatus.ORDERED:
+            return payment
+
+        return self._settlement_service.settle(
+            payment_id=payment.payment_id,
+            bank_confirmed=True,
+            bank_order_reference=payment.bank_order_reference,
+        )
 
     def _find_default_sending(self, username: str) -> LinkedAccount | None:
         """Find the user's default sending account, or None."""

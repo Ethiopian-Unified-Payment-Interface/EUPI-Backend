@@ -63,44 +63,27 @@ class CallbackAcknowledgement(BaseModel):
     ),
 )
 def receive_bank_callback(body: BankCallbackBody) -> CallbackAcknowledgement:
-    from backend.main import get_pis_service, get_repo
-    from backend.presentation.api_v1.payments import _get_or_404, _payment_store
-
-    payment = _get_or_404(body.payment_id)
-    pis = get_pis_service()
-    repo = get_repo()
+    from backend.application.use_cases.payment_settlement_service import (
+        ConflictingSettlementError,
+        PaymentNotFoundError,
+    )
+    from backend.main import get_payment_settlement_service
 
     try:
-        final_payment = pis.process_callback(
-            payment=payment,
+        final_payment = get_payment_settlement_service().settle(
+            payment_id=body.payment_id,
             bank_confirmed=body.confirmed,
+            bank_order_reference=body.bank_order_reference,
             failure_reason=body.failure_reason,
         )
+    except PaymentNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except ConflictingSettlementError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
-        )
-
-    _payment_store[body.payment_id] = final_payment
-    repo.update_payment(final_payment)
-
-    if final_payment.webhook_url:
-        payload = {
-            "event_type": "payment.settled",
-            "payment_id": final_payment.payment_id,
-            "status": final_payment.status.value,
-            "amount": str(final_payment.initiate_request.amount),
-            "currency": final_payment.initiate_request.currency,
-            "end_to_end_id": final_payment.initiate_request.end_to_end_id,
-            "bank_order_reference": final_payment.bank_order_reference,
-            "failure_reason": final_payment.failure_reason,
-            "updated_at": final_payment.updated_at.isoformat(),
-        }
-        repo.create_webhook_event(
-            payment_id=final_payment.payment_id,
-            webhook_url=final_payment.webhook_url,
-            payload=payload,
         )
 
     return CallbackAcknowledgement(

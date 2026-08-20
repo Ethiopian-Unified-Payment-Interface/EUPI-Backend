@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 
 # Domain imports only
 from backend.domain.models.account import BankID
@@ -194,7 +195,19 @@ class AccountLinkingService:
                     acct = port.get_balance(link.account_number)
                     available_balance = acct.available_balance
                     ledger_balance = acct.ledger_balance
-                except Exception:
+                except Exception as exc:
+                    # One unreachable bank must not blank the whole wallet, so
+                    # this degrades to zero for that account only. It is logged
+                    # because a zero here is indistinguishable, to the caller,
+                    # from a genuinely empty account.
+                    logger.warning(
+                        "Balance sync failed; reporting zero for this account",
+                        extra={
+                            "bank_id": link.bank_id.value,
+                            "link_id": link.link_id,
+                            "error": str(exc),
+                        },
+                    )
                     available_balance = Decimal("0.00")
                     ledger_balance = Decimal("0.00")
             else:

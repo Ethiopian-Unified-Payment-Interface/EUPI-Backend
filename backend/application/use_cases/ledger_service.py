@@ -128,7 +128,14 @@ class LedgerService:
             )
         )
 
-        # ── Fee: EUPI's own books ────────────────────────────────────────────
+        # The customer fee is deliberately absent from the mirror legs above.
+        # The payer is debited `amount + customer_fee` at their bank, but the
+        # fee is the *bank's* income, not value EUPI orchestrated, and mirroring
+        # it here would inflate orchestrated volume by the fee on every payment.
+        # The payer's full debit is recorded where it belongs: on the payment
+        # itself, and in the bank's own journal.
+
+        # ── Fee, real side: EUPI's own books ─────────────────────────────────
         if fee_quote is not None and fee_quote.eupi_revenue > 0:
             receivable_ref = LedgerAccount.fee_receivable_ref(fee_quote.bank_id)
             revenue_ref = LedgerAccount.fee_revenue_ref(fee_quote.currency)

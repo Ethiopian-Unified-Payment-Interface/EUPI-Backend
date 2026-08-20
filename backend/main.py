@@ -4,10 +4,11 @@ EUPI — FastAPI Entry Point
 Wires real infrastructure adapters, SQLite persistence, and JWT authentication.
 
 Boot sequence (via lifespan):
-  1. Initialise SQLite repositories → creates tables if absent.
-  2. Load all existing payments from DB into the in-memory cache.
-  3. Wire real bank adapters → AIS, PIS, and Super App use-case orchestrators.
+  1. Initialise repositories → creates tables if absent.
+  2. Provision the simulated core banking system's accounts.
+  3. Wire bank adapters → AIS, PIS, and Super App use-case orchestrators.
   4. Register all bank rails with the Smart Router.
+  5. Start the webhook delivery and bank settlement workers.
 
 Run locally:
     uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
@@ -40,6 +41,12 @@ from backend.infrastructure.adapters.banks.wegagen_cbs import WegagenCBSAdapter
 from backend.infrastructure.adapters.banks.awash_cbs import AwashCBSAdapter
 from backend.infrastructure.adapters.banks.abyssinia_cbs import AbyssiniaCBSAdapter
 from backend.infrastructure.adapters.banks.berhan_cbs import BerhanCBSAdapter
+from backend.infrastructure.adapters.banks.simulation.engine import (
+    SimulatedCoreBankingEngine,
+)
+from backend.infrastructure.adapters.banks.simulation.settlement_worker import (
+    settlement_worker_loop,
+)
 from backend.infrastructure.adapters.identity.fayda import FaydaAdapter
 from backend.infrastructure.adapters.router.smart_router import SmartRouter
 from backend.infrastructure.auth.password_hasher import Argon2PasswordHasher
@@ -68,6 +75,9 @@ from backend.infrastructure.database.admin_repositories import (
 # ── Application: Use-Case Orchestrators ───────────────────────────────────────
 from backend.application.use_cases.ais_service import AISService
 from backend.application.use_cases.pis_service import PISService
+from backend.application.use_cases.payment_settlement_service import (
+    PaymentSettlementService,
+)
 from backend.application.use_cases.user_registration_service import UserRegistrationService
 from backend.application.use_cases.account_linking_service import AccountLinkingService
 from backend.application.use_cases.superapp_transfer_service import SuperAppTransferService
@@ -129,8 +139,11 @@ _ledger_service: LedgerService | None = None
 _fee_service: FeeService | None = None
 _consent_service: ConsentService | None = None
 
+_cbs_engine: SimulatedCoreBankingEngine | None = None
+
 _ais_service: AISService | None = None
 _pis_service: PISService | None = None
+_settlement_service: PaymentSettlementService | None = None
 _identity_port: FaydaAdapter | None = None
 _user_registration_service: UserRegistrationService | None = None
 _account_linking_service: AccountLinkingService | None = None
@@ -187,6 +200,16 @@ def get_ais_service() -> AISService:
 def get_pis_service() -> PISService:
     assert _pis_service is not None, "PISService not initialised."
     return _pis_service
+
+
+def get_payment_settlement_service() -> PaymentSettlementService:
+    assert _settlement_service is not None, "PaymentSettlementService not initialised."
+    return _settlement_service
+
+
+def get_cbs_engine() -> SimulatedCoreBankingEngine:
+    assert _cbs_engine is not None, "Simulated core banking engine not initialised."
+    return _cbs_engine
 
 
 def get_identity_port() -> FaydaAdapter:
@@ -289,6 +312,7 @@ async def lifespan(app: FastAPI):
     global _consent_service
     global _password_hasher
     global _ledger_service, _fee_service
+    global _cbs_engine, _settlement_service
     global _ais_service, _pis_service, _identity_port
     global _user_registration_service, _account_linking_service, _superapp_transfer_service
     global _admin_auth_service, _admin_bank_service, _admin_merchant_service, _admin_analytics_service
@@ -320,14 +344,32 @@ async def lifespan(app: FastAPI):
     _consent_repo = ConsentRepository(_db)
     _fin_vault_repo = FinVaultRepository(_db)
 
-    # 2. Concrete bank adapters
+    # 2. Bank rails.
+    #
+    # One core banking simulator shared by all six adapters: they are distinct
+    # banks, but inside a single simulator, which is what lets a cross-bank
+    # transfer debit and credit in one atomic step. Provisioning is idempotent,
+    # so a restart never resets a balance someone is mid-demo with.
+    #
+    # Going live means swapping an adapter for one that talks to a real CBS.
+    # Nothing above this line changes, because nothing above it knows which it
+    # is talking to.
+    _cbs_engine = SimulatedCoreBankingEngine(
+        _db, settlement_delay_seconds=settings.CBS_SETTLEMENT_DELAY_SECONDS
+    )
+    _cbs_engine.provision()
+    logger.warning(
+        "Bank rails are SIMULATED. Balances and transfers are sandbox "
+        "fixtures, not customer money."
+    )
+
     bank_ports = {
-        BankID.COOP:      CoopCBSAdapter(),
-        BankID.CBE:       CBECBSAdapter(),
-        BankID.WEGAGEN:   WegagenCBSAdapter(),
-        BankID.AWASH:     AwashCBSAdapter(),
-        BankID.ABYSSINIA: AbyssiniaCBSAdapter(),
-        BankID.BERHAN:    BerhanCBSAdapter(),
+        BankID.COOP:      CoopCBSAdapter(_cbs_engine),
+        BankID.CBE:       CBECBSAdapter(_cbs_engine),
+        BankID.WEGAGEN:   WegagenCBSAdapter(_cbs_engine),
+        BankID.AWASH:     AwashCBSAdapter(_cbs_engine),
+        BankID.ABYSSINIA: AbyssiniaCBSAdapter(_cbs_engine),
+        BankID.BERHAN:    BerhanCBSAdapter(_cbs_engine),
     }
 
     # 3. Identity adapter (depends on repo for token revocation)
@@ -359,6 +401,10 @@ async def lifespan(app: FastAPI):
         ledger_service=_ledger_service,
         fee_service=_fee_service,
     )
+    _settlement_service = PaymentSettlementService(
+        payment_repo=_repo,
+        pis_service=_pis_service,
+    )
 
     # 7. Super App services
     _user_registration_service = UserRegistrationService(
@@ -379,6 +425,11 @@ async def lifespan(app: FastAPI):
         # the other mints the consent token derived from that verification.
         identity_port=_identity_port,
         registration_service=_user_registration_service,
+        # Settlement has to run in this request: the bank adapter already
+        # posted the debit and credit, and returning ORDERED is what the
+        # Super App renders as a pending transfer that never settled.
+        payment_repo=_repo,
+        settlement_service=_settlement_service,
     )
 
     # 8. Admin Services
@@ -406,18 +457,30 @@ async def lifespan(app: FastAPI):
         password_hasher=_password_hasher,
     )
 
-    # 10. Launch background Webhook Delivery Worker
+    # 10. Background workers.
     from backend.infrastructure.webhooks.delivery_worker import webhook_worker_loop
-    webhook_task = asyncio.create_task(webhook_worker_loop(_db, poll_interval=10.0))
+
+    # The simulated banks' settlement dispatcher. Without it a payment reaches
+    # ORDERED and stays there: the callback endpoint exists, but in a sandbox
+    # there is no bank to call it.
+    background = [
+        asyncio.create_task(webhook_worker_loop(_db, poll_interval=10.0)),
+        asyncio.create_task(
+            settlement_worker_loop(
+                engine=_cbs_engine,
+                settlement=_settlement_service,
+                poll_interval=settings.CBS_SETTLEMENT_POLL_INTERVAL_SECONDS,
+                failure_rate=settings.CBS_SETTLEMENT_FAILURE_RATE,
+            )
+        ),
+    ]
 
     yield  # ← Server is running
 
     logger.info("Gateway shutting down.")
-    webhook_task.cancel()
-    try:
-        await webhook_task
-    except asyncio.CancelledError:
-        pass
+    for task in background:
+        task.cancel()
+    await asyncio.gather(*background, return_exceptions=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

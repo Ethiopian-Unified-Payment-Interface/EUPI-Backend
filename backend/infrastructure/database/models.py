@@ -14,6 +14,15 @@ Tables:
   ledger_entries   — Append-only double-entry postings.
   fee_rules        — Versioned pricing rules; never edited in place.
 
+  sim_bank_accounts   — Simulated core banking balances. NOT EUPI custody.
+  sim_bank_entries    — Simulated core banking journal. NOT EUPI custody.
+  sim_transfer_orders — In-flight simulated transfers awaiting settlement.
+
+The `sim_` prefix is load-bearing. Those three tables belong to the simulated
+banks, not to EUPI: EUPI is a pass-through orchestrator and holds no customer
+funds. A balance in `sim_bank_accounts` is a fixture, never a liability, and
+anything that reports it to a human must say so.
+
 Money columns are Numeric, never Float. Binary floating point cannot represent
 0.10 exactly, and a payments ledger that drifts by a cent cannot be audited.
 """
@@ -27,6 +36,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Float,
+    Index,
     Integer,
     Numeric,
     String,
@@ -75,6 +85,19 @@ class PaymentRecord(Base):
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="ETB")
     end_to_end_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     remittance_info: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Pricing, fixed at initiation and never re-quoted.
+    #
+    # The fee is debited alongside the principal, so the figure that priced the
+    # debit has to survive to settlement: re-quoting at settlement means a rule
+    # published in between makes the ledger disagree with the money that moved.
+    # Nullable because payments created before pricing moved to initiation have
+    # no quote to record.
+    customer_fee: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    eupi_revenue: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    fee_rule_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    fee_rule_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    fee_bank_id: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     # Multi-tenant Developer Platform Fields
     app_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
@@ -414,6 +437,134 @@ class KYBRequestRecord(Base):
     status: Mapped[str] = mapped_column(String(20), default="PENDING", nullable=False)
     submitted_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class SimulatedBankAccountRecord(Base):
+    """
+    An account inside a simulated bank's core banking system.
+
+    This is the bank's book, not EUPI's. EUPI never holds customer funds, so
+    nothing here is a EUPI liability — these rows exist so that a transfer in
+    the sandbox does what a transfer does: leave one balance and arrive at
+    another. When a real CBS is integrated the adapter stops reading this table
+    and the rows become dead weight, which is the intended outcome.
+
+    Keyed by (bank_id, account_number) because the same account number is
+    deliberately reused across banks in the demo data, and because a natural
+    key lets the transfer path lock exactly the two rows it is about to move
+    money between without a prior lookup.
+    """
+    __tablename__ = "sim_bank_accounts"
+
+    bank_id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    account_number: Mapped[str] = mapped_column(String(30), primary_key=True)
+
+    account_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    account_type: Mapped[str] = mapped_column(String(20), nullable=False, default="SAVINGS")
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="ETB")
+    branch_code: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+
+    # available_balance is what may be spent; ledger_balance includes items the
+    # bank has booked but not released. The simulator moves both together — it
+    # has no concept of a hold — but the two columns are kept distinct because
+    # the domain model exposes both and a real CBS does separate them.
+    available_balance: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    ledger_balance: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    opened_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+class SimulatedBankEntryRecord(Base):
+    """
+    One leg of movement on a simulated account. Append-only.
+
+    `balance_after` is stored rather than derived so a statement can be read
+    without replaying the journal, and so a test can assert that the running
+    balance and the account row never diverge — the cheapest possible detector
+    for a debit that committed while its matching credit did not.
+
+    Direction follows bank-statement convention, not accounting convention:
+    DEBIT means funds left the account, CREDIT means funds arrived. This is the
+    opposite sign to `ledger_entries`, which is EUPI's own double-entry book.
+    """
+    __tablename__ = "sim_bank_entries"
+
+    entry_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    bank_id: Mapped[str] = mapped_column(String(20), nullable=False)
+    account_number: Mapped[str] = mapped_column(String(30), nullable=False)
+
+    direction: Mapped[str] = mapped_column(String(6), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="ETB")
+    balance_after: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+
+    entry_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    counterparty_bank_id: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    counterparty_account: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    counterparty_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    end_to_end_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    order_reference: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    narration: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    booked_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    __table_args__ = (
+        # Statement queries are always "this account, this window, newest first".
+        Index(
+            "ix_sim_entry_account_booked",
+            "bank_id",
+            "account_number",
+            "booked_at",
+        ),
+        Index("ix_sim_entry_e2e", "end_to_end_id"),
+    )
+
+
+class SimulatedTransferOrderRecord(Base):
+    """
+    A transfer the simulated bank has accepted and not yet confirmed.
+
+    Two jobs, both of which need durable state rather than an in-process queue:
+
+    1. **Idempotency.** `end_to_end_id` is the primary key, so resubmitting a
+       transfer collides at INSERT inside the same transaction that moves the
+       money. A retried order cannot debit twice even if two processes race.
+    2. **Settlement.** The row is what the callback worker polls. Settlement is
+       asynchronous at a real bank and the sandbox keeps that shape, so a
+       payment that is stuck in flight looks the same here as it would in
+       production instead of only failing once a real rail is connected.
+    """
+    __tablename__ = "sim_transfer_orders"
+
+    end_to_end_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    order_reference: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+
+    debtor_bank_id: Mapped[str] = mapped_column(String(20), nullable=False)
+    debtor_account_number: Mapped[str] = mapped_column(String(30), nullable=False)
+    creditor_bank_id: Mapped[str] = mapped_column(String(20), nullable=False)
+    creditor_account_number: Mapped[str] = mapped_column(String(30), nullable=False)
+
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    fee_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=0)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="ETB")
+
+    # POSTED  — money has moved on the simulated books, confirmation pending.
+    # SETTLED — the bank has confirmed and EUPI has been told.
+    # REVERSED— the bank rejected after posting; the movement was backed out.
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="POSTED")
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    settle_after: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    __table_args__ = (
+        # The worker's only query: unsettled orders whose delay has elapsed.
+        Index("ix_sim_order_due", "status", "settle_after"),
+    )
 
 
 class AuditLogRecord(Base):
