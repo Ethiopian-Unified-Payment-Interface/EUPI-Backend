@@ -52,7 +52,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Iterable
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -289,6 +289,19 @@ class SimulatedCoreBankingEngine(RepositoryBase):
             record = session.get(
                 SimulatedBankAccountRecord, (bank_id.value, number)
             )
+            if record is None and len(number) == 14 and number.isdigit():
+                from backend.infrastructure.mock_data.fayda_registry import get_identity
+                identity = get_identity(number)
+                if identity:
+                    name_upper = identity["full_name"].strip().upper()
+                    record = (
+                        session.query(SimulatedBankAccountRecord)
+                        .filter(
+                            SimulatedBankAccountRecord.bank_id == bank_id.value,
+                            func.upper(SimulatedBankAccountRecord.account_name) == name_upper,
+                        )
+                        .first()
+                    )
             if record is None:
                 raise AccountNotFoundError(
                     f"Account '{number}' does not exist at {bank_id.value}."

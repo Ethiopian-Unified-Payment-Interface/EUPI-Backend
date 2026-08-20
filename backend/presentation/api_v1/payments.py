@@ -162,7 +162,6 @@ def verify_payment(payment_id: str, body: PaymentVerifyBody) -> PaymentResponse:
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
 
-    _payment_store[payment_id] = updated
     repo.update_payment(updated)
     return _payment_to_response(updated)
 
